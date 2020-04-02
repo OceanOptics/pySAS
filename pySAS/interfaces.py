@@ -2,14 +2,13 @@ from serial import Serial, SerialException
 from timeit import default_timer
 from time import sleep, time
 from datetime import datetime
-# from struct import pack
+from math import isnan
 from threading import Thread, Lock
 import logging
 from pySAS.log import Log, LogBinary, pack_timestamp_satlantic
 from gpiozero import OutputDevice
 from gpiozero.pins.mock import MockFactory  # required for virtual hardware
 from pySAS import VIRTUAL_RELAY
-# from pySAS.mock_serial import MockSerial
 import os
 from ubxtranslator.core import Parser as UBXParser
 from pySAS.ubxtranslator_messages import NAV_ARDUSIMPLE
@@ -17,7 +16,6 @@ from pySAS.ubxtranslator_messages import NAV_ARDUSIMPLE
 import pytz
 from pySatlantic.instrument import Instrument as SatlanticParser
 import atexit
-# from collections import namedtuple
 
 
 def get_serial_instance(interface, cfg):
@@ -173,8 +171,9 @@ class IndexingTable:
     def get_position(self):
         if not self.alive:
             self.__logger.error('get_position: unable, not alive')
-            return
-        self.__logger.debug('get_position()')
+            self.position = float('nan')
+            return self.position
+        # self.__logger.debug('get_position()')
         # Flush serial buffer
         self._serial_read()
         # Ask current position of encoder to motor
@@ -186,16 +185,17 @@ class IndexingTable:
         if msg is not None:
             try:
                 pos_steps = int(msg.decode(self.ENCODING, self.UNICODE_HANDLING).strip())
-                # position_steps = re.sub("[^0-9-]", "", msg)  # way slower than strip
+                self.position = pos_steps / self.GEAR_BOX_RATIO
             except ValueError or UnicodeDecodeError:
                 self.__logger.error('unable to parse position')
-                return None
-            self.position = pos_steps / self.GEAR_BOX_RATIO
-            self._log_data.write([self.position, 'nan', 'get'], time())
-            return self.position
+                self.position = float('nan')
+            finally:
+                self._log_data.write([self.position, 'nan', 'get'], time())
+                return self.position
         else:
             self.__logger.error('unable to get position')
-            return None
+            self.position = float('nan')
+            return self.position
 
     def get_stall_flag(self):
         """
@@ -206,7 +206,7 @@ class IndexingTable:
         """
         self.stalled = self.get_flag('st')
         if self.stalled:
-            self.__logger.error('STALLED')
+            self.__logger.debug('STALLED')
         self._log_data.write([float('nan'), self.stalled, 'nan'], time())
         return self.stalled
 
@@ -463,7 +463,7 @@ class GPS(Sensor):
                                  'path': cfg.get(self.__class__.__name__, 'path',
                                                  fallback=os.path.join(os.path.dirname(__file__), 'data')),
                                  'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
-                                 'variable_names': ['datetime', 'datetime_accuracy', 'datetime_valid',
+                                 'variable_names': ['gps_datetime', 'datetime_accuracy', 'datetime_valid',
                                                      'heading', 'heading_accuracy', 'heading_valid',
                                                      'heading_motion', 'heading_vehicle',
                                                      'heading_vehicle_accuracy', 'heading_vehicle_valid',
@@ -471,7 +471,7 @@ class GPS(Sensor):
                                                      'latitude', 'longitude', 'horizontal_accuracy',
                                                      'altitude','altitude_accuracy',
                                                      'fix_ok', 'fix_type', 'last_packet'],
-                                 'variable_units': ['yyyy-mm-dd HH:MM:SS.nnnnnn', 'ms', 'bool',
+                                 'variable_units': ['yyyy-mm-dd HH:MM:SS.us', 'us', 'bool',
                                                     'deg', 'deg', 'bool',
                                                     'deg', 'deg', 'deg', 'bool',
                                                     'm/s ground', 'm/s'
@@ -523,9 +523,11 @@ class GPS(Sensor):
         # 5: time only
 
     def start_logging(self):
+        self.__logger.debug('start logging')
         self._log_data = True
 
     def stop_logging(self):
+        self.__logger.debug('stop logging')
         self._log_data = False
         if self._data_logger_lock.acquire(timeout=2):
             try:
@@ -547,7 +549,7 @@ class GPS(Sensor):
                 self.stop(from_thread=True)
             except ValueError as e:
                 self.__logger.error(e)
-                self.__logger.error('corrupted message: multiple access on same port ?')
+                self.__logger.error('corrupted message')
             except Exception as e:
                 self.__logger.error(e)
                 sleep(1)
@@ -560,9 +562,9 @@ class GPS(Sensor):
             # Get date and time
             self.datetime = datetime(packet[2].year, packet[2].month, packet[2].day,
                                      packet[2].hour, packet[2].min, packet[2].sec,
-                                     packet[2].nano if packet[2].nano > 0 else 0,
-                                     pytz.utc)  # somehow datetime support nanoseconds
-            self.datetime_accuracy = packet[2].tAcc # keep nanoseconds
+                                     packet[2].nano // 1000 if packet[2].nano > 0 else 0,  # nano to micro seconds
+                                     pytz.utc)
+            self.datetime_accuracy = packet[2].tAcc // 1000  # convert nano seconds to micro seconds
             self.datetime_valid = bool(packet[2].valid.validDate) and bool(packet[2].valid.validTime)
             # Get Position
             self.latitude = packet[2].lat / 10000000
@@ -599,7 +601,8 @@ class GPS(Sensor):
         if self._log_data:
             if self._data_logger_lock.acquire(timeout=1):
                 try:
-                    self._data_logger.write([self.datetime, self.datetime_accuracy, self.datetime_valid,
+                    self._data_logger.write([self.datetime.strftime('%Y/%m/%d %H:%M:%S.%f'),
+                                             self.datetime_accuracy, self.datetime_valid,
                                              self.heading, self.heading_accuracy, self.heading_valid,
                                              self.heading_motion, self.heading_vehicle,
                                              self.heading_vehicle_accuracy, self.heading_vehicle_valid,
@@ -633,25 +636,26 @@ class HyperSAS(Sensor):
         self._packet_Li_dark_raw = None
         self._packet_THS_raw = None
 
-        self._packet_Lt_received = None
-        self._packet_Lt_dark_received = None
-        self._packet_Li_received = None
-        self._packet_Li_dark_received = None
-        self._packet_THS_received = None
+        self._packet_Lt_received = float('nan')
+        self._packet_Lt_dark_received = float('nan')
+        self._packet_Li_received = float('nan')
+        self._packet_Li_dark_received = float('nan')
+        self._packet_THS_received = float('nan')
 
         self.Lt = None
         self.Lt_dark = None
         self.Li = None
         self.Li_dark = None
-        self.roll = None
-        self.pitch = None
-        self.compass = None
+        self.roll = float('nan')
+        self.pitch = float('nan')
+        self.compass = float('nan')      # Compass heading measured
+        self.compass_adj = float('nan')  # Compass heading corrected for magnetic declination
 
-        self._packet_Lt_parsed = None
-        self._packet_Lt_dark_parsed = None
-        self._packet_Li_parsed = None
-        self._packet_Li_dark_parsed = None
-        self._packet_THS_parsed = None
+        self.packet_Lt_parsed = float('nan')
+        self.packet_Lt_dark_parsed = float('nan')
+        self.packet_Li_parsed = float('nan')
+        self.packet_Li_dark_parsed = float('nan')
+        self.packet_THS_parsed = float('nan')
 
         # Load device file
         self.__immersed = cfg.getboolean(self.__class__.__name__, 'immersed', fallback=False)
@@ -730,172 +734,45 @@ class HyperSAS(Sensor):
         """
         Parse packet received since last parsing. Called by UX
         """
-        # TODO Add option to clear older frames
         # Parse THS
-        if self._packet_THS_received is not None and (self._packet_THS_parsed is None or
-                                                      self._packet_THS_received > self._packet_THS_parsed):
+        if self._packet_THS_received > self.packet_THS_parsed or \
+                (isnan(self.packet_THS_parsed) and not isnan(self._packet_THS_received)):
             THS, _ = self._parser.parse_frame(self._packet_THS_raw)
-            self._packet_THS_parsed = time()
+            self.packet_THS_parsed = time()
             self.roll = THS['ROLL']
             self.pitch = THS['PITCH']
             self.compass = THS['COMP']
         # Parse Lt Dark
-        if self._packet_Lt_dark_received is not None and (self._packet_Lt_dark_parsed is None or
-                                                          self._packet_Lt_dark_received > self._packet_Lt_dark_parsed):
+        if self._packet_Lt_dark_received > self.packet_Lt_dark_parsed or \
+                (isnan(self.packet_Lt_dark_parsed) and not isnan(self._packet_Lt_dark_received)):
             Lt_dark, _ = self._parser.parse_frame(self._packet_Lt_dark_raw)
-            self._packet_Lt_dark_parsed = time()
+            self.packet_Lt_dark_parsed = time()
             self.Lt_dark = Lt_dark['LT_SATHLD']
         # Parse Lt
-        if self._packet_Lt_received is not None and (self._packet_Lt_parsed is None or
-                                                     self._packet_Lt_received > self._packet_Lt_parsed):
+        if self._packet_Lt_received > self.packet_Lt_parsed or \
+                (isnan(self.packet_Lt_parsed) and not isnan(self._packet_Lt_received)):
             Lt, _ = self._parser.parse_frame(self._packet_Lt_raw)
-            self._packet_Lt_parsed = time()
+            self.packet_Lt_parsed = time()
             if self.Lt_dark is not None:
                 self.Lt = Lt['LT_SATHSL'] - self.Lt_dark
             else:
                 self.Lt = Lt['LT_SATHSL']
         # Parse Li Dark
-        if self._packet_Li_dark_received is not None and (self._packet_Li_dark_parsed is None or
-                                                          self._packet_Li_dark_received > self._packet_Li_dark_parsed):
+        if self._packet_Li_dark_received > self.packet_Li_dark_parsed or \
+                (isnan(self.packet_Li_dark_parsed) and not isnan(self._packet_Li_dark_received)):
             Li_dark, _ = self._parser.parse_frame(self._packet_Li_dark_raw)
-            self._packet_Li_dark_parsed = time()
+            self.packet_Li_dark_parsed = time()
             self.Li_dark = Li_dark['LI_SATHLD']
         # Parse Li
-        if self._packet_Li_received is not None and (self._packet_Li_parsed is None or
-                                                     self._packet_Li_received > self._packet_Li_parsed):
+        if self._packet_Li_received > self.packet_Li_parsed or \
+                (isnan(self.packet_Li_parsed) and not isnan(self._packet_Li_received)):
             Li, _ = self._parser.parse_frame(self._packet_Li_raw)
-            self._packet_Li_parsed = time()
-            self._packet_Lt_parsed = time()
+            self.packet_Li_parsed = time()
             if self.Li_dark is not None:
                 self.Li = Li['LI_SATHSL'] - self.Li_dark
             else:
                 self.Li = Li['LI_SATHSL']
 
-# DEPRECATED
-# Use mock_serial_sensor instead to create virtual serial ports in which we feed data
-
-# class SensorSimulator (Sensor):
-#
-#     '''
-#     Same as sensor class to test application
-#     Use MockFactory for relay and doesn't use any serial connection
-#     '''
-#     def __init__(self, cfg):
-#         # Loggers
-#         self.__logger = logging.getLogger(self.__class__.__name__)
-#         self._log_data = Log({'filename_prefix': self.__class__.__name__,
-#                               'path': cfg.get('DEFAULT', 'path',
-#                                               fallback=os.path.join(os.path.dirname(__file__), 'data')),
-#                               'length': cfg.getint('DEFAULT', 'file_length', fallback=60)})
-#
-#         # No Serial
-#         self._serial = MockSerial()
-#         self._buffer = bytearray()
-#         self._max_buffer_length = 16384
-#
-#         # Mock Relay
-#         self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
-#                                    active_high=True, initial_value=False, pin_factory=MockFactory())
-#
-#         # Thread
-#         self._thread = None
-#         self.alive = False
-#
-#         # Variables
-#         self.timestamp = None
-#
-#     def start(self):
-#         if not self.alive:
-#             self.__logger.debug('start')
-#             self._relay.on()
-#             self.alive = True
-#             self._thread = Thread(name=self.__class__.__name__, target=self.run)
-#             self._thread.daemon = True
-#             self._thread.start()
-#
-#     def stop(self):
-#         if self.alive:
-#             self.__logger.debug('stop')
-#             self.alive = False
-#             self._thread.join(2)
-#             if self._thread.is_alive():
-#                 self.__logger.error('Thread of ' + self.__class__.__name__ + ' did not join.')
-#             self._relay.off()
-#             self._log_data.close()  # Required to start new log_data file when instrument restart
-#
-#     def run(self):
-#         while self.alive:  # and self._serial.is_open:
-#             sleep(2)
-#             self.handle_packet(b'Mock Packet')
-#         self.stop()
-#
-#     def handle_packet(self, packet):
-#         self.timestamp = time()
-#         self._log_data.write(packet, self.timestamp)
-
-
-# GPSFlags = namedtuple('GPSFlags', ['gnssFixOK', 'diffSoln', 'relPosValid', 'carrSoln', 'isMoving', 'refPosMiss',
-#                                    'refObsMiss', 'relPosHeadingValid','relPosNormalized'])
-
-# DEPRECATED
-# Use gpiozero instead
-
-# class Relay:
-#
-#     def __init__(self, gpio_pin):
-#         self.logger = logging.getLogger(self.__class__.__name__)
-#         self.channel = gpio_pin
-#
-#     def on(self):
-#         self.logger.debug('Power on GPIO Pin: ' + self.gpio_pin)
-#
-#     def off(self):
-#         self.logger.debug('Power off GPIO Pin: ' + self.gpio_pin)
-#
-#     def state(self):
-#         self.logger.debug('Power on GPIO Pin: ' + self.gpio_pin)
-#         return False
-#
-#     @staticmethod
-#     def infos():
-#         return 'Simulator'
-
-# class RelayPhysical(Relay):
-#
-#     ONE_TIME_GPIO_INIT = True
-#
-#     def __init__(self, gpio_pin):
-#         super().__init__(gpio_pin)
-#         if self.ONE_TIME_GPIO_INIT:
-#             self.logger.INFO("Initialized RPi GPIO")
-#             try:
-#                 import RPi.GPIO as GPIO
-#                 GPIO.setmode(GPIO.BOARD)  # Set pin numbering to the board
-#             except RuntimeError:
-#                 self.logger.error("Error importing RPi.GPIO!\n"
-#                              "This is probably because you need superuser privileges. \n"
-#                              "You can achieve this by using 'sudo' to run your script")
-#             self.ONE_TIME_GPIO_INIT = False
-#         GPIO.setup(gpio_pin, GPIO.OUT, initial=GPIO.LOW)
-#
-#     def on(self):
-#         super().on()
-#         GPIO.output(self.channel, GPIO.HIGH)
-#
-#     def off(self):
-#         super().off()
-#         GPIO.output(self.channel, GPIO.LOW)
-#
-#     def state(self):
-#         super().state()
-#         return GPIO.input(self.channel) == GPIO.HIGH
-#
-#     @staticmethod
-#     def infos():
-#         return str(GPIO.RPI_INFO) + '\n\n GPIO version: ' + str(GPIO.VERSION) + '\n'
-#
-#     def __del__(self):
-#         GPIO.cleanup(self.channel)
 
 if __name__ == '__main__':
     from configparser import ConfigParser

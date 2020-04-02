@@ -6,11 +6,12 @@ from dash.dependencies import Input, Output, State
 from flask import request
 import plotly.graph_objs as go
 import logging
-from time import gmtime, strftime
+from time import time, gmtime, strftime
 from math import isnan
 import os
 from pySAS import __version__, CFG_FILENAME, ui_log_queue
 from pySAS.runner import Runner
+
 
 STATUS_REFRESH_INTERVAL = 1000
 HYPERSAS_READING_INTERVAL = 5000
@@ -28,8 +29,8 @@ app.title = 'pySAS v' + __version__
 ##########
 # Layout #
 ##########
-figure_sun_model = html.P("Sun Model")
-figure_spectrum_history = html.P("Figure Lt Li history")
+figure_sun_model = html.P("")
+figure_spectrum_history = html.P("")
 
 if runner.es is not None:
     core_instruments_names = "HyperSAS+Es"
@@ -108,7 +109,8 @@ controls_layout = [
             ], className="mb-3", size='sm'),
             dbc.InputGroup([
                 dbc.InputGroupAddon("Refresh", addon_type="prepend"),
-                dbc.Input(id='refresh_sun_elevation', type='number', min=0, max=90, step=1, debounce=True),  # , value=10),
+                dbc.Input(id='refresh_sun_elevation', type='number', min=0, max=90, step=1, debounce=True),
+                # , value=10),
                 dbc.InputGroupAddon("s", addon_type="append")
             ], className="mb-3", size='sm')
         ]),
@@ -215,7 +217,6 @@ def update_time(_):
                State('get_switch_n_updates', 'children'), State('get_switch_last_n_updates', 'children')])
 def set_operation_mode_tower(operation_mode, tower_switch, operation_mode_previous, tower_switch_previous,
                              get_switch_n_updates, get_switch_last_n_updates):
-    # TODO Bug Fix called by get_switch -> thorough tower_switch, add flag to prevent that
     trigger = dash.callback_context.triggered[0]['prop_id']
     logger.debug('set_operation_mode_tower: ' + str(operation_mode) + ', ' + str(tower_switch) + ', ' +
                  str(operation_mode_previous) + ', ' + str(tower_switch_previous) + ', ' +
@@ -280,7 +281,7 @@ def set_operation_mode_tower(operation_mode, tower_switch, operation_mode_previo
             tower_zero_class_name = 'd-none'
     # Update UI
     return tower_switch_class_name, tower_orientation_class_name, tower_zero_class_name, \
-        hypersas_switch_class_name, hypersas_status_class_name, operation_mode, tower_switch, dash.no_update
+           hypersas_switch_class_name, hypersas_status_class_name, operation_mode, tower_switch, dash.no_update
 
 
 @app.callback([Output('hypersas_switch', 'value'), Output('tower_switch', 'value'),
@@ -338,7 +339,19 @@ def set_hypersas_switch(value, _, get_switch_n_updates, get_switch_last_n_update
     raise dash.exceptions.PreventUpdate()
 
 
-# TODO Update logging label if appropriate
+@app.callback([Output('hypersas_status', 'children'), Output('hypersas_status', 'color')],
+              [Input('status_refresh_interval', 'n_intervals')],
+              [State('hypersas_status', 'children')])
+def get_hypersas_status(_, state):
+    if runner.hypersas.alive:
+        if state == 'Logging':
+            raise dash.exceptions.PreventUpdate()
+        return 'Logging', 'success'
+    else:
+        if state == 'Off':
+            raise dash.exceptions.PreventUpdate()
+        return 'Off', 'warning'
+
 
 ##########
 # GPS
@@ -347,12 +360,16 @@ def set_hypersas_switch(value, _, get_switch_n_updates, get_switch_last_n_update
                Output('gps_flag_time', 'className')],
               [Input('status_refresh_interval', 'n_intervals')])
 def get_gps_flags(_):
-    if runner.gps.heading_valid:
+    if time() - runner.gps.packet_relposned_received > runner.DATA_EXPIRED_DELAY:
+        hdg = 'No Hdg', 'warning'
+    elif runner.gps.heading_valid:
         hdg = 'Hdg', 'success'
     else:
         hdg = 'No Hdg', 'danger'
 
-    if runner.gps.fix_type == 0:
+    if time() - runner.gps.packet_pvt_received > runner.DATA_EXPIRED_DELAY:
+        fix = 'Off', 'warning'
+    elif runner.gps.fix_type == 0:
         fix = 'No Fix', 'danger'
     elif runner.gps.fix_type == 1:  # Dead reckoning
         fix = 'DR', 'warning'
@@ -362,17 +379,17 @@ def get_gps_flags(_):
         fix = '3D-Fix', 'success'
     elif runner.gps.fix_type == 4:
         fix = 'GNSS+DR', 'info'
-    elif runner.gps.fix_type == 2:
+    elif runner.gps.fix_type == 5:
         fix = 'Time Only', 'warning'
     else:
         fix = 'Unknown', 'danger'
 
     if runner.gps.datetime_valid:
-        time = 'd-none',
+        dt = 'd-none',
     else:
-        time = 'mt-2 ml-1',
+        dt = 'mt-2 ml-1',
 
-    return hdg + fix + time
+    return hdg + fix + dt
 
 
 ##########
@@ -485,7 +502,7 @@ def set_tower_valid_orientation(limits, reverse, limits_init, reverse_init):
         return output_included, True, reverse_init
     elif trigger == 'tower_reverse_valid_orientation.checked' and reverse_init is None:
         logger.debug('set_tower_valid_orientation: init reverse')
-        return output_included, True, True  # TODO Bug Fix were init limits doesn't work due to double trigger from load page
+        return output_included, True, True
     else:
         logger.debug('set_tower_valid_orientation: ' + str(limits))
         runner.pilot.set_tower_limits(limits)
@@ -575,7 +592,6 @@ def toggle_modal(n1, n2, is_open):
     [Input("halt", "n_clicks")])
 def halt(n_clicks):
     if n_clicks:
-        # runner.write_cfg()  # TODO Enable write configuration
         logger.info('halt')
         runner.halt()
         # Stop dash environment (will stop the application
@@ -596,34 +612,47 @@ def halt(n_clicks):
                Input('tower_orientation', 'value'),
                Input('tower_valid_orientation', 'value'), Input('tower_reverse_valid_orientation', 'checked')])
 def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse_tower_limits):
-    # TODO add traces of headings of vehicle and motion from GPS if available
-    # TODO add trace of HyperSAS compass if available
-    # Tower orientation and valid range are already set
+    timestamp = time()
+    # Get Tower Orientation
     trigger = dash.callback_context.triggered[0]['prop_id']
+    tower = float('nan')
     if trigger == 'tower_orientation.value':
         if tower_orientation:
             tower = tower_orientation
-        else:
-            tower = float('nan')
     else:
         tower = runner.indexing_table.position
+    # Get Tower Limits
     if trigger == 'tower_valid_orientation.value':
         auto_pilot_limits = tower_limits
         if reverse_tower_limits:
             auto_pilot_limits.reverse()
     else:
         auto_pilot_limits = runner.pilot.tower_limits
-
-    # TODO Update in case operation mode is manual
     # Get ship heading
-    ship = runner.ship_heading
+    ship = float('nan')
+    if timestamp - runner.ship_heading_timestamp < runner.DATA_EXPIRED_DELAY:
+        ship = runner.ship_heading
     # Get sun
-    sun = runner.sun_azimuth
+    sun = float('nan')
+    if timestamp - runner.sun_position_timestamp < runner.DATA_EXPIRED_DELAY:
+        sun = runner.sun_azimuth
     # Get Tower
     tower = ship + tower
+    # Get HyperSAS Heading
+    ths = float('nan')
+    if timestamp - runner.hypersas.packet_THS_parsed < runner.DATA_EXPIRED_DELAY:
+        ths = runner.hypersas.compass_adj
+    # Get motion heading
+    motion = float('nan')
+    if timestamp - runner.gps.packet_pvt_received < runner.DATA_EXPIRED_DELAY and \
+            runner.gps.speed > 1:  # speed greater than 1 m/s -> 3.6 km/h
+        motion = runner.gps.heading_motion
     # Assume autopilot_limits is in range -180 180
     # auto_pilot_limits_360 = [a % 360 for a in auto_pilot_limits]
-    blind_zone_width = 360 - (auto_pilot_limits[1] - auto_pilot_limits[0])
+    if auto_pilot_limits[1] > auto_pilot_limits[0]:
+        blind_zone_width = 360 - (auto_pilot_limits[1] - auto_pilot_limits[0])
+    else:
+        blind_zone_width = auto_pilot_limits[0] - auto_pilot_limits[1]
     blind_zone_center = ship + auto_pilot_limits[1] + blind_zone_width / 2
 
     traces = []
@@ -655,6 +684,22 @@ def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse
                                   opacity=0.2,
                                   marker=dict(color=['#000']),
                                   name='Blind zone'))
+    if not isnan(ths):
+        traces.append(go.Scatterpolar(mode='lines+markers',
+                                      r=[0, 1],
+                                      theta=[0, ths],
+                                      marker=dict(symbol=['circle', 'bowtie'], color='#1a76ff', size=8),
+                                      name='HyperSAS THS',
+                                      opacity=0.3,
+                                      line_color='#1a76ff'))
+    if not isnan(motion):
+        traces.append(go.Scatterpolar(mode='lines+markers',
+                                      r=[0, 1],
+                                      theta=[0, motion],
+                                      marker=dict(symbol=['circle', 'triangle-up'], color='#000', size=8),
+                                      name='GPS Motion',
+                                      opacity=0.3,
+                                      line_color='black'))
     if not traces:
         raise dash.exceptions.PreventUpdate()
     layout = go.Layout(title='Orientation',
@@ -668,38 +713,40 @@ def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse
 
 @app.callback(Output('figure_spectrums', 'figure'), [Input('hypersas_reading_interval', 'n_intervals')])
 def update_figure_spectrum(_):
+    timestamp = time()
     # Parse data
     runner.hypersas.parse_packets()
     if runner.es:
         runner.es.parse_packets()
     # Update traces
     traces = []
-    if runner.hypersas.Lt is not None:
+    if runner.hypersas.Lt is not None and timestamp - runner.hypersas.packet_Lt_parsed < runner.DATA_EXPIRED_DELAY:
         traces.append(go.Scatter(x=runner.hypersas.Lt_wavelength,
                                  y=runner.hypersas.Lt,
-                                 name='Lt (uW/cm^2/nm/sr)',
+                                 name='Lt (uW/cm<sup>2</sup>/nm/sr)',
                                  marker={'color': '#37536d'}))
-    if runner.hypersas.Li is not None:
+    if runner.hypersas.Li is not None and timestamp - runner.hypersas.packet_Li_parsed < runner.DATA_EXPIRED_DELAY:
         traces.append(go.Scatter(x=runner.hypersas.Li_wavelength,
                                  y=runner.hypersas.Li,
-                                 name='Li (uW/cm^2/nm/sr)',
+                                 name='Li (uW/cm<sup>2</sup>/nm/sr)',
                                  marker={'color': '#1a76ff'}))
-    if runner.es and runner.es.Es is not None:
+    if runner.es and runner.es.Es is not None and timestamp - runner.es.packet_Es_parsed < runner.DATA_EXPIRED_DELAY:
         traces.append(go.Scatter(x=runner.hypersas.Es_wavelength,
                                  y=runner.hypersas.Es,
-                                 name='Es (uW/cm^2/nm/sr)',
+                                 name='Es (uW/cm<sup>2</sup>/nm/sr)',
                                  marker={'color': 'orange'}))
-    if not traces:
-        raise dash.exceptions.PreventUpdate()
     # Set Layout
     layout = go.Layout(
         title='Spectrum',
         showlegend=True,
         legend=dict(
-            x=0,
-            y=1.0
+            x=1.0,
+            y=1.0,
+            xanchor='right'
         ),
-        margin=dict(l=40, r=0, t=40, b=30)
+        margin=dict(l=40, r=0, t=40, b=30),
+        xaxis=dict(title=dict(text='Wavelength (nm)')),
+        yaxis=dict(title=dict(text='Radiance (uW/cm<sup>2</sup>/nm/sr)')),
     )
     return {'data': traces, 'layout': layout}
 

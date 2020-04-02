@@ -2,8 +2,6 @@ import os
 from time import gmtime, strftime
 from struct import pack
 
-# TODO Copy and paste from Inlinino, find way to integrate script nicely
-
 
 class Log:
 
@@ -52,7 +50,6 @@ class Log:
             suffix += 1
         # Create File
         # TODO add exception in case can't open file
-        # TODO specify number of bytes in buffer depending on instrument
         self._file = open(filename, self.FILE_MODE)
         # Write header (only if has variable names)
         if self.variable_names:
@@ -62,7 +59,6 @@ class Log:
                 'yyyy/mm/dd HH:MM:SS.fff, ' + ', '.join(x for x in self.variable_units) + self.terminator)
         # Time file open
         self._file_timestamp = timestamp
-        # TODO Reset Instrument Number of Packet Received
 
     def _smart_open(self, timestamp):
         # Open file if necessary

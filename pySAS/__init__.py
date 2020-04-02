@@ -4,8 +4,9 @@ from time import strftime, gmtime
 # from queue import Queue
 from io import StringIO
 import os
+from geomag.geomag import GeoMag
 
-__version__ = '0.1.0'
+__version__ = '0.3.0'
 
 # Global Variables
 CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg.ini')
@@ -43,3 +44,6 @@ root_logger.addHandler(ch_ui)
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 # root_logger.debug('__init__')
+
+# Load NOAA World Magnetic Model
+WORLD_MAGNETIC_MODEL = GeoMag()

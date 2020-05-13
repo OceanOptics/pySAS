@@ -8,7 +8,7 @@ import logging
 from pySAS.log import Log, LogBinary, pack_timestamp_satlantic
 from gpiozero import OutputDevice
 from gpiozero.pins.mock import MockFactory  # required for virtual hardware
-from pySAS import VIRTUAL_RELAY
+from gpiozero.exc import BadPinFactory
 import os
 from ubxtranslator.core import Parser as UBXParser
 from pySAS.ubxtranslator_messages import NAV_ARDUSIMPLE
@@ -41,6 +41,7 @@ class IndexingTable:
     """
     GEAR_BOX_RATIO = 200000 / 360
     POSITION_LIMITS = [-180, 180]
+    MOTION_TIMEOUT = 10  # seconds
 
     COMMAND_EXECUTION_TIME = 0.05
     ENCODING = 'latin-1'
@@ -74,7 +75,7 @@ class IndexingTable:
             self.__logger.debug(self.__class__.__name__ + ' already initialized for port ' + self._serial_port)
             return
         self._serial_port = cfg.get(self.__class__.__name__, 'port')
-        # Set loggers
+        # Loggers
         self.__logger = logging.getLogger(self.__class__.__name__)
         self._log_data = Log({'filename_prefix': self.__class__.__name__,
                               'path': cfg.get(self.__class__.__name__, 'path',
@@ -83,15 +84,18 @@ class IndexingTable:
                               'variable_names': ['position', 'stall_flag', 'type'],
                               'variable_units': ['degrees', '1:stalled | 0:ok', 'get|set|reset'],
                               'variable_precision': ['%.2f', '%s', '%s']})
+        # Serial
         self._serial = get_serial_instance(self.__class__.__name__, cfg)
-        # physical pin factory is Factory(), fake pin factory for testing is MockFactory()
-        if VIRTUAL_RELAY:
+        # GPIO
+        try:
+            # Try to load physical pin factory (Factory())
             self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
-                                       active_high=True, initial_value=False, pin_factory=MockFactory())
-        else:
+                                       active_high=False, initial_value=False)
+        except BadPinFactory:
+            # No physical gpio library installed, likely running on development platform
+            self.__logger.warning('Loading GPIO Mock Factory')
             self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
-                                       active_high=True, initial_value=False)
-
+                                       active_high=False, initial_value=False, pin_factory=MockFactory())
         # Configuration variables specific to motor
         self.rotation_ispeed = 0.02778    # sec / deg
         self.rotation_delay = 0.1331 * 2  # sec (start and stop)
@@ -146,27 +150,30 @@ class IndexingTable:
         # This can be done by setting the argument check_stall_flag = True
         if not self.alive:
             self.__logger.error('set_position: unable, not alive')
-            return
+            return False
         if position_degrees < self.POSITION_LIMITS[0] or self.POSITION_LIMITS[1] < position_degrees:
             self.__logger.error('set_position: unable, position out of range ' + str(position_degrees))
-            return
+            return False
         self.__logger.debug('set_position(' + str(position_degrees) + ', ' + str(check_stall_flag) + ')')
-        if check_stall_flag:
-            pre_pos = self.get_position()
-            if pre_pos is None:
-                return None
         pos_steps = int(position_degrees * self.GEAR_BOX_RATIO)
         self._serial.write(bytes(self.REGISTRATOR + 'ma ' + str(pos_steps) + self.TERMINATOR, self.ENCODING))
-        self.position = position_degrees
-        self._log_data.write([position_degrees, 'nan', 'set'], time())
         if check_stall_flag:
-            sleep(self.estimate_motion_time(pre_pos, position_degrees))
-            stall_flag = self.get_stall_flag()
-            if stall_flag:
+            # Wait till the tower stops moving
+            start_time = time()
+            pre_pos = self.get_position()
+            if isnan(pre_pos):  # Unable to read position
+                return False
+            sleep(self.COMMAND_EXECUTION_TIME)
+            while pre_pos != self.get_position() or time() - start_time > self.MOTION_TIMEOUT:
+                pre_pos = self.position
+                sleep(self.COMMAND_EXECUTION_TIME)
+            if self.get_stall_flag():
                 self.__logger.warning('stalled while moving to ' + str(position_degrees))
-            return stall_flag
+                return False
         else:
-            return None
+            self.position = position_degrees
+        self._log_data.write([position_degrees, 'nan', 'set'], time())
+        return True
 
     def get_position(self):
         if not self.alive:
@@ -314,15 +321,12 @@ class IndexingTable:
         self.__logger.debug('stop')
         if self.alive:
             # Get stall flag (and reset if necessary)
-            stall_flag = self.get_stall_flag()
-            if stall_flag is None:
-                self.__logger.error('unable to read stall flag')
-            else:
-                if stall_flag:
-                    self.__logger.warning('indexing table stalled.')
+            self.get_stall_flag()
+            if self.stalled is not None: # Can read stall flag and communicate
+                if self.stalled:
                     self.reset_stall_flag()
-            # Move indexing table back to 0
-            self.set_position(0, check_stall_flag=True)
+                # Move indexing table back to 0
+                self.set_position(0, check_stall_flag=True)
             # Stop serial connection
             if hasattr(self._serial, 'cancel_read'):
                 self._serial.cancel_read()
@@ -366,27 +370,28 @@ class Sensor:
             self.__logger.debug(self.__class__.__name__ + ' already initialized for port ' + self._serial_port)
             return
         self._serial_port = cfg.get(self.__class__.__name__, 'port')
-        # Data Logger
+        # Loggers
         self.__logger = logging.getLogger(self.__class__.__name__)
         self._data_logger = Log({'filename_prefix': self.__class__.__name__,
                                  'path': cfg.get(self.__class__.__name__, 'path',
                                                  fallback=os.path.join(os.path.dirname(__file__), 'data')),
                                  'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
-
         # Serial
         self._serial = get_serial_instance(self.__class__.__name__, cfg)
         self._buffer = bytearray()
-
-        if VIRTUAL_RELAY:
+        # GPIO
+        try:
+            # Try to load physical pin factory (Factory())
             self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
-                                       active_high=True, initial_value=False, pin_factory=MockFactory())
-        else:
+                                       active_high=False, initial_value=False)
+        except BadPinFactory:
+            # No physical gpio library installed, likely running on development platform
+            self.__logger.warning('Loading GPIO Mock Factory')
             self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
-                                       active_high=True, initial_value=False)
+                                       active_high=False, initial_value=False, pin_factory=MockFactory())
         # Thread
         self._thread = None
         self.alive = False
-
         # Register methods to execute at exit as cannot use __del__ as logging is already off-loaded
         atexit.register(self.stop)
 
@@ -412,6 +417,7 @@ class Sensor:
             self.alive = False
             if hasattr(self._serial, 'cancel_read'):
                 self._serial.cancel_read()
+            # TODO Find elegant way to immediatly stop thread as slow down user interface when switching from auto to manual mode
             if not from_thread:
                 self._thread.join(2)
                 if self._thread.is_alive():
@@ -659,7 +665,8 @@ class HyperSAS(Sensor):
 
         # Load device file
         self.__immersed = cfg.getboolean(self.__class__.__name__, 'immersed', fallback=False)
-        self._parser = SatlanticParser(cfg.get(self.__class__.__name__, 'sip'), self.__immersed)
+        self._parser_device_file = cfg.get(self.__class__.__name__, 'sip')
+        self._parser = SatlanticParser(self._parser_device_file, self.__immersed)
         # Dispatcher
         self._dispatcher = {}
         for packet_header, cal in self._parser.cal.items():
@@ -685,11 +692,15 @@ class HyperSAS(Sensor):
         self.__missing_packet_header = []
 
     def set_parser(self, device_file):
+        if self._parser_device_file == device_file:
+            self.__logger.debug('device file already up to date ' + device_file)
+            return
         self.__logger.info('update device file with ' + device_file)
         was_alive = False
         if self.alive:
             was_alive = True
             self.stop()
+        self._parser_device_file = device_file
         self._parser = SatlanticParser(device_file, self.__immersed)
         if was_alive:
             self.start()

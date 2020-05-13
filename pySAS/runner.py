@@ -98,7 +98,11 @@ class Runner:
             self.gps.stop()
 
     def run_auto(self):
+        flag_no_gps_fix = False
+        flag_invalid_datetime = False
         flag_invalid_heading = False
+        flag_pvt_expired = False
+        flag_relposned_expired = False
         flag_no_position = False
         flag_stalled = False
         first_iteration = True
@@ -106,108 +110,124 @@ class Runner:
             # Timer
             iteration_timestamp = time()
 
-            # try:
-            # Check GPS
-            if not self.gps.fix_ok:
-                self.__logger.info('No GPS fix, fix_type = ' + str(self.gps.fix_type))
-                self._wait(iteration_timestamp)
-                continue
-            if not self.gps.datetime_valid:
-                self._wait(iteration_timestamp)
-                self.__logger.info('Invalid date and/or time')
-                continue
-            if not self.gps.heading_valid:
-                if not flag_invalid_heading:
-                    self.__logger.info('Invalid heading')
-                    flag_invalid_heading = True
-                self._wait(iteration_timestamp)
-                continue
-            if time() - self.gps.packet_pvt_received > self.DATA_EXPIRED_DELAY or\
-                    isnan(self.gps.packet_pvt_received):
-                self.__logger.info('gps packet PVT expired')
-                self._wait(iteration_timestamp)
-                continue
-            if time() - self.gps.packet_relposned_received > self.DATA_EXPIRED_DELAY or\
-                    isnan(self.gps.packet_relposned_received):
-                self.__logger.info('gps packet RELPOSNED expired')
-                self._wait(iteration_timestamp)
-                continue
+            try:
+                # Check GPS
+                if not self.gps.fix_ok:
+                    if not flag_no_gps_fix:
+                        self.__logger.info('No GPS fix, fix_type = ' + str(self.gps.fix_type))
+                        flag_no_gps_fix = True
+                    self._wait(iteration_timestamp)
+                    continue
+                if not self.gps.datetime_valid:
+                    if not flag_invalid_datetime:
+                        self.__logger.info('Invalid date and/or time')
+                        flag_invalid_datetime = True
+                    self._wait(iteration_timestamp)
+                    continue
+                if not self.gps.heading_valid:
+                    if not flag_invalid_heading:
+                        self.__logger.info('Invalid heading')
+                        flag_invalid_heading = True
+                    self._wait(iteration_timestamp)
+                    continue
+                if time() - self.gps.packet_pvt_received > self.DATA_EXPIRED_DELAY or\
+                        isnan(self.gps.packet_pvt_received):
+                    if not flag_pvt_expired:
+                        self.__logger.info('gps packet PVT expired')
+                        flag_pvt_expired = True
+                    self._wait(iteration_timestamp)
+                    continue
+                if time() - self.gps.packet_relposned_received > self.DATA_EXPIRED_DELAY or\
+                        isnan(self.gps.packet_relposned_received):
+                    if not flag_relposned_expired:
+                        self.__logger.info('gps packet RELPOSNED expired')
+                        flag_relposned_expired = True
+                    self._wait(iteration_timestamp)
+                    continue
 
-            # Reset GPS flags
-            if flag_invalid_heading:
-                flag_invalid_heading = False
+                # Reset GPS flags
+                if flag_no_gps_fix:
+                    flag_no_gps_fix = False
+                if flag_invalid_datetime:
+                    flag_invalid_datetime = False
+                if flag_invalid_heading:
+                    flag_invalid_heading = False
+                if flag_pvt_expired:
+                    flag_pvt_expired = False
+                if flag_relposned_expired:
+                    flag_relposned_expired = False
 
-            # Get Sun Position
-            self.sun_elevation, self.sun_azimuth = get_sun_position(self.gps.latitude, self.gps.longitude,
-                                                                    self.gps.datetime, self.gps.altitude)
-            self.sun_position_timestamp = time()
+                # Get Sun Position
+                self.sun_elevation, self.sun_azimuth = get_sun_position(self.gps.latitude, self.gps.longitude,
+                                                                        self.gps.datetime, self.gps.altitude)
+                self.sun_position_timestamp = time()
 
-            # Toggle Sleep Mode
-            if self.sun_elevation < self.min_sun_elevation:
-                if not self.start_sleep_timestamp:
-                    self.start_sleep_timestamp = time()
-                if (time() - self.start_sleep_timestamp > self.ASLEEP_DELAY and not self.asleep) or \
-                        first_iteration:
-                    self.__logger.info('fall asleep')
-                    self.indexing_table.stop()
-                    self.hypersas.stop()
-                    self.gps.stop_logging()
-                    self.asleep = True
-                self.stop_sleep_timestamp = None
-            else:
-                if not self.stop_sleep_timestamp:
-                    self.stop_sleep_timestamp = time()
-                if (time() - self.stop_sleep_timestamp > self.ASLEEP_DELAY and self.asleep) or \
-                        first_iteration:
-                    self.__logger.info('waking up')
-                    self.indexing_table.start()
-                    self.gps.start_logging()
-                    self.hypersas.start()
-                    self.asleep = False
-                self.start_sleep_timestamp = None
-            if self.asleep:
-                sleep(self.ASLEEP_INTERRUPT)
-                continue
-
-            # Correct HyperSAS THS Compass
-            self.hypersas.compass_adj = get_true_north_heading(self.hypersas.compass,
-                                                               self.gps.latitude, self.gps.longitude,
-                                                               self.gps.datetime, self.gps.altitude)
-
-            # Get Heading
-            ship_heading_tmp = self.get_ship_heading()
-
-            # Smooth Heading
-            if self.filter:
-                ship_heading_tmp = self.filter.update(ship_heading_tmp)
-            self.ship_heading = ship_heading_tmp
-
-            if not isnan(self.sun_azimuth):
-                # Compute aimed indexing table orientation
-                aimed_indexing_table_orientation = self.pilot.steer(self.sun_azimuth, self.ship_heading)
-                if isnan(aimed_indexing_table_orientation):
-                    if not flag_no_position:
-                        self.__logger.info('No orientation available.')
-                        flag_no_position = True
+                # Toggle Sleep Mode
+                if self.sun_elevation < self.min_sun_elevation:
+                    if not self.asleep:
+                        if not self.start_sleep_timestamp:
+                            self.start_sleep_timestamp = time()
+                        if time() - self.start_sleep_timestamp > self.ASLEEP_DELAY or first_iteration:
+                            self.__logger.info('fall asleep')
+                            self.indexing_table.stop()
+                            self.hypersas.stop()
+                            self.gps.stop_logging()
+                            self.asleep = True
+                        self.stop_sleep_timestamp = None
                 else:
-                    # Update Tower
-                    if abs(self.indexing_table.get_position() - aimed_indexing_table_orientation) \
-                            > self.HEADING_TOLERANCE:
-                        if self.indexing_table.get_stall_flag():
-                            if not flag_stalled:
-                                self.__logger.warning('Indexing table stalled')
-                                flag_stalled = True
-                        else:
-                            self.indexing_table.set_position(aimed_indexing_table_orientation)
-                            if flag_stalled:
-                                flag_stalled = False
-                            if flag_no_position:
-                                flag_no_position = False
+                    if self.asleep:
+                        if not self.stop_sleep_timestamp:
+                            self.stop_sleep_timestamp = time()
+                        if time() - self.stop_sleep_timestamp > self.ASLEEP_DELAY or first_iteration:
+                            self.__logger.info('waking up')
+                            self.indexing_table.start()
+                            self.gps.start_logging()
+                            self.hypersas.start()
+                            self.asleep = False
+                    self.start_sleep_timestamp = None
+                if self.asleep:
+                    sleep(self.ASLEEP_INTERRUPT)
+                    continue
 
-            if first_iteration:
-                first_iteration = False
-            # except Exception as e:
-            #     self.__logger.critical(e)
+                # Correct HyperSAS THS Compass
+                self.hypersas.compass_adj = get_true_north_heading(self.hypersas.compass,
+                                                                   self.gps.latitude, self.gps.longitude,
+                                                                   self.gps.datetime, self.gps.altitude)
+
+                # Get Heading
+                ship_heading_tmp = self.get_ship_heading()
+
+                # Smooth Heading (not yet implemented)
+                if self.filter:
+                    ship_heading_tmp = self.filter.update(ship_heading_tmp)
+                self.ship_heading = ship_heading_tmp
+
+                if not isnan(self.sun_azimuth):
+                    # Compute aimed indexing table orientation
+                    aimed_indexing_table_orientation = self.pilot.steer(self.sun_azimuth, self.ship_heading)
+                    if isnan(aimed_indexing_table_orientation):
+                        if not flag_no_position:
+                            self.__logger.info('No orientation available.')
+                            flag_no_position = True
+                    else:
+                        # Update Tower
+                        if abs(self.indexing_table.get_position() - aimed_indexing_table_orientation) \
+                                > self.HEADING_TOLERANCE:
+                            if self.indexing_table.get_stall_flag():
+                                if not flag_stalled:
+                                    self.__logger.warning('Indexing table stalled')
+                                    flag_stalled = True
+                            else:
+                                self.indexing_table.set_position(aimed_indexing_table_orientation)
+                                if flag_stalled:
+                                    flag_stalled = False
+                                if flag_no_position:
+                                    flag_no_position = False
+
+                if first_iteration:
+                    first_iteration = False
+            except Exception as e:
+                self.__logger.critical(e)
 
             # Wait before next iteration
             if self.alive:
@@ -216,7 +236,12 @@ class Runner:
     def _wait(self, start_iter):
         delta = self.refresh_delay - (time() - start_iter)
         if delta > 0:
-            sleep(delta)
+            if delta > 0.5:
+                start_sleep = time()
+                while time() - start_sleep < delta and self.alive:
+                    sleep(0.1)
+            else:
+                sleep(delta)
         else:
             self.__logger.warning('cannot keep up with refresh rate, slowing down')
             sleep(1 + abs(self.refresh_delay))
@@ -243,14 +268,19 @@ class Runner:
             raise ValueError('Invalid heading source')
 
     def set_cfg_variable(self, section, variable, value):
-        self.__logger.debug('set_cfg_variable(' + section + ', ' + variable + ', ' + value + ')')
-        self.cfg[section][variable] = value
+        if self.cfg[section][variable] == str(value):
+            self.__logger.debug('set_cfg_variable(' + section + ', ' + variable + ', ' + str(value) + ') already up to date')
+            return
+        self.__logger.debug('set_cfg_variable(' + section + ', ' + variable + ', ' + str(value) + ')')
+        self.cfg[section][variable] = str(value)
         self.cfg_last_update = gmtime()
+        if self.cfg.getboolean(self.__class__.__name__, 'ui_update_cfg', fallback=False):
+            self.write_cfg()
 
     def write_cfg(self):
         self.__logger.debug('write_cfg')
         # Save updated configuration
-        with open(self._cfg_filename) as cfg_file:
+        with open(self._cfg_filename, 'w') as cfg_file:
             self.cfg.write(cfg_file)
 
     def halt(self):
@@ -260,7 +290,6 @@ class Runner:
 
     def stop(self):
         self.__logger.debug('stop')
-        # self.write_cfg()  # TODO Activate write for production
 
 
 # # Update leap_seconds_adjustments table from pysolar
@@ -353,7 +382,7 @@ class AutoPilot:
         self.compass_zero = normalize_angle(cfg.getfloat(self.__class__.__name__, 'gps_orientation_on_ship', fallback=0))
         self.tower_zero = normalize_angle(cfg.getfloat(self.__class__.__name__, 'indexing_table_orientation_on_ship', fallback=0))
         self.tower_limits = [float('nan'), float('nan')]
-        self.set_tower_limits(cfg.get(self.__class__.__name__, 'valid_indexing_table_orientation_limits').split(':'))
+        self.set_tower_limits(cfg.get(self.__class__.__name__, 'valid_indexing_table_orientation_limits').replace('[', '').replace(']', '').split(','))
         self.target = cfg.getfloat(self.__class__.__name__, 'optimal_angle_away_from_sun', fallback=135)
 
     def set_tower_limits(self, limits):

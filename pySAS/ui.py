@@ -506,6 +506,7 @@ def set_tower_valid_orientation(limits, reverse, limits_init, reverse_init):
     else:
         logger.debug('set_tower_valid_orientation: ' + str(limits))
         runner.pilot.set_tower_limits(limits)
+        runner.set_cfg_variable('AutoPilot', 'valid_indexing_table_orientation_limits', limits)
         return output_included, limits_init, reverse_init
 
 
@@ -520,6 +521,7 @@ def set_min_sun_elevation(value, _, init):
             return True
         logger.debug('set_min_sun_elevation: ' + str(value))
         runner.min_sun_elevation = value
+        runner.set_cfg_variable('Runner', 'min_sun_elevation', value)
     elif trigger == 'min_sun_elevation.loading_state':
         logger.debug('set_min_sun_elevation: loading')
     raise dash.exceptions.PreventUpdate()
@@ -538,6 +540,7 @@ def set_refresh_sun_elevation(value, _, init):
         if value < 0:
             logger.debug('set_refresh_sun_elevation: invalid input' + str(value))
         runner.refresh_delay = value
+        runner.set_cfg_variable('Runner', 'refresh', value)
     elif trigger == 'refresh_sun_elevation.loading_state':
         logger.debug('set_refresh_sun_elevation: loading')
     raise dash.exceptions.PreventUpdate()
@@ -569,7 +572,7 @@ def set_hypersas_device_file(device_file, _, init):
             valid = True
         else:
             valid = False
-        return valid, not valid
+        return init, valid, not valid
     elif trigger == 'hypersas_device_file.loading_state':
         logger.debug('set_hypersas_device_file: loading')
     raise dash.exceptions.PreventUpdate()
@@ -702,7 +705,7 @@ def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse
                                       line_color='black'))
     if not traces:
         raise dash.exceptions.PreventUpdate()
-    layout = go.Layout(title='Orientation',
+    layout = go.Layout(title='System Orientation',
                        showlegend=False,
                        polar=dict(radialaxis=dict(visible=False),
                                   angularaxis=dict(visible=True, direction='clockwise', rotation=90)),
@@ -737,7 +740,7 @@ def update_figure_spectrum(_):
                                  marker={'color': 'orange'}))
     # Set Layout
     layout = go.Layout(
-        title='Spectrum',
+        title='HyperSAS Spectrum',
         showlegend=True,
         legend=dict(
             x=1.0,

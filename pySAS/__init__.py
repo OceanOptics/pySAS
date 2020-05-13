@@ -11,7 +11,6 @@ __version__ = '0.3.0'
 # Global Variables
 CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg.ini')
 LOGGING_LEVEL = logging.DEBUG
-VIRTUAL_RELAY = True
 
 # Setup application logging
 if not os.path.isdir('logs'):

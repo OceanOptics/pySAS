@@ -61,7 +61,7 @@ class Runner:
         self.hypersas = HyperSAS(self.cfg)
         self.es = None
         # if 'Es' in self.cfg.sections():
-        #     self.es = Es(self.cfg, parser=self.hypersas.parser, data_logger=self.hypersas.parser)
+        #     self.es = Es(self.cfg, parser=self.hypersas.parser, data_logger=self.hypersas.logger)
 
         # Pilot
         self.pilot = AutoPilot(self.cfg)
@@ -95,7 +95,7 @@ class Runner:
             self._thread.join(2)
             if self._thread.is_alive():
                 self.__logger.error('Thread of ' + self.__class__.__name__ + ' did not join.')
-            self.gps.stop()
+            # self.gps.stop()
 
     def run_auto(self):
         flag_no_gps_fix = False
@@ -285,8 +285,10 @@ class Runner:
 
     def halt(self):
         if self.cfg.getboolean('Runner', 'halt_on_exit', fallback=False):
-            call("sudo shutdown -h now", shell=True)
-        # sys.exit()  # UI stop the application itself
+            call(["sudo", "shutdown", "-h", "now"], shell=True)
+            # TODO Test on RPi
+            # TODO add 5 second before shutting down to make sure ui is still responsive
+            # TODO check if non blocking needed using Popen
 
     def stop(self):
         self.__logger.debug('stop')

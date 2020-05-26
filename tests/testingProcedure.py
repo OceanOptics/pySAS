@@ -14,8 +14,6 @@ from pySAS.runner import get_true_north_heading, normalize_angle
 class TestingProcedure:
     def __init__(self, cfg_filename=None):
         self.cfg = configparser.ConfigParser()
-        self.gps_heading = float('nan')
-        self.index_pos = float('nan')
 
         # Controllers & Sensors
         self.gps = GPS(self.cfg)
@@ -32,6 +30,7 @@ class TestingProcedure:
         for i in range(10):
             for j in range(-180, 181):
                 self.indexing_table.set_position(j, check_stall_flag=True)
+
 
 if __name__ == "__main__":
     cfg_path = os.path.join(os.path.dirname(__file__), '..', 'pysas_cfg.ini')

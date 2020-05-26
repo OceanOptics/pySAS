@@ -71,8 +71,15 @@ body {
  * Settings in Side bar
  */
 .sidebar-settings {
-    position: absolute;
-    bottom: 0;
+    position: static;
+    margin-top: 50px;
+}
+
+@media (min-height: 768px) {
+    .sidebar-settings {
+        position: absolute;
+        bottom: 0px;
+    }
 }
 
 /*

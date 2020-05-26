@@ -772,7 +772,7 @@ def update_error_modal(_):
     # else:
     #     return msg, False
 
-# TODO Add Warning Modal by using filter in logginig
+# TODO Add Warning Modal by using filter in logging
 # class MyFilter(object):
 #     def __init__(self, level):
 #         self.__level = level

@@ -780,11 +780,20 @@ def update_figure_spectrum(_):
                                  y=runner.hypersas.Li,
                                  name='Li (uW/cm<sup>2</sup>/nm/sr)',
                                  marker={'color': '#1a76ff'}))
-    if runner.es and runner.es.Es is not None and timestamp - runner.es.packet_Es_parsed < runner.DATA_EXPIRED_DELAY:
-        traces.append(go.Scatter(x=runner.hypersas.Es_wavelength,
-                                 y=runner.hypersas.Es,
-                                 name='Es (uW/cm<sup>2</sup>/nm/sr)',
-                                 marker={'color': 'orange'}))
+    if runner.es:
+        if runner.es.Es is not None and timestamp - runner.es.packet_Es_parsed < runner.DATA_EXPIRED_DELAY:
+            traces.append(go.Scatter(x=runner.es.Es_wavelength,
+                                     y=runner.es.Es,
+                                     yaxis='y2',
+                                     name='Es (uW/cm<sup>2</sup>/nm)',
+                                     marker={'color': 'orange'}))
+    else:
+        if runner.hypersas.Es is not None and timestamp - runner.hypersas.packet_Es_parsed < runner.DATA_EXPIRED_DELAY:
+            traces.append(go.Scatter(x=runner.hypersas.Es_wavelength,
+                                     y=runner.hypersas.Es,
+                                     yaxis='y2',
+                                     name='Es (uW/cm<sup>2</sup>/nm)',
+                                     marker={'color': 'orange'}))
     # Set Layout
     layout = go.Layout(
         title='HyperSAS Spectrum',
@@ -794,9 +803,10 @@ def update_figure_spectrum(_):
             y=1.0,
             xanchor='right'
         ),
-        margin=dict(l=40, r=0, t=40, b=30),
+        margin=dict(l=40, r=40, t=40, b=30),
         xaxis=dict(title=dict(text='Wavelength (nm)')),
         yaxis=dict(title=dict(text='Radiance (uW/cm<sup>2</sup>/nm/sr)')),
+        yaxis2=dict(title=dict(text='Irradiance (uW/cm<sup>2</sup>/nm)'), side="right", anchor="x", overlaying="y")
     )
     return {'data': traces, 'layout': layout}
 

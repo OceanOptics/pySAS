@@ -5,7 +5,7 @@ from math import isnan
 import atexit
 from subprocess import call
 from threading import Thread
-from pySAS.interfaces import IndexingTable, GPS, HyperSAS #, #Es
+from pySAS.interfaces import IndexingTable, GPS, HyperSAS, Es
 from pySAS import WORLD_MAGNETIC_MODEL
 
 # pySolar
@@ -60,8 +60,8 @@ class Runner:
         self.gps = GPS(self.cfg)
         self.hypersas = HyperSAS(self.cfg)
         self.es = None
-        # if 'Es' in self.cfg.sections():
-        #     self.es = Es(self.cfg, parser=self.hypersas.parser, data_logger=self.hypersas.logger)
+        if 'Es' in self.cfg.sections():
+            self.es = Es(self.cfg, data_logger=self.hypersas._data_logger, parser=self.hypersas._parser)
 
         # Pilot
         self.pilot = AutoPilot(self.cfg)

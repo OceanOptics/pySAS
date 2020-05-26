@@ -15,6 +15,7 @@ from pySAS.ubxtranslator_messages import NAV_ARDUSIMPLE
 
 import pytz
 from pySatlantic.instrument import Instrument as SatlanticParser
+from pySatlantic.instrument import FrameError as SatlanticFrameError
 import atexit
 
 
@@ -46,7 +47,7 @@ class IndexingTable:
     COMMAND_EXECUTION_TIME = 0.05
     ENCODING = 'latin-1'
     REGISTRATOR = '\x08'  # Backspace
-    TERMINATOR = '\r\n'  # CR LF (\x0D\x0A)
+    TERMINATOR = '\r\n'   # CR LF (\x0D\x0A)
     UNICODE_HANDLING = 'replace'
 
     def __new__(cls, *args, **kwargs):
@@ -531,7 +532,7 @@ class GPS(Sensor):
     def start_logging(self):
         self.__logger.debug('start logging')
         if not self.alive:
-            self.__logger.warning('GPS is not alive')
+            self.__logger.warning('not alive')
         self._log_data = True
 
     def stop_logging(self):
@@ -607,7 +608,7 @@ class GPS(Sensor):
 
         # Write parsed data
         if self._log_data:
-            if self._data_logger_lock.acquire(timeout=1):
+            if self._data_logger_lock.acquire(timeout=0.5):
                 try:
                     self._data_logger.write([self.datetime.strftime('%Y/%m/%d %H:%M:%S.%f'),
                                              self.datetime_accuracy, self.datetime_valid,
@@ -625,35 +626,44 @@ class GPS(Sensor):
 
 class HyperSAS(Sensor):
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, data_logger=None, parser=None):
         super().__init__(cfg)
         self.__logger = logging.getLogger(self.__class__.__name__)
 
-        self._data_logger = LogBinary({'filename_prefix': self.__class__.__name__,
-                                       'path': cfg.get(self.__class__.__name__, 'path',
-                                                       fallback=os.path.join(os.path.dirname(__file__), 'data')),
-                                       'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
-        self._data_logger.timestamp_packer = pack_timestamp_satlantic
-        # TODO _log_data add custom header matching files from HyperSAS
-        self._data_logger.registration = b''
-        self._data_logger.terminator = b'\r\n'
+        if data_logger is None:
+            self._data_logger = LogBinary({'filename_prefix': self.__class__.__name__,
+                                           'path': cfg.get(self.__class__.__name__, 'path',
+                                                           fallback=os.path.join(os.path.dirname(__file__), 'data')),
+                                           'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
+            self._data_logger.timestamp_packer = pack_timestamp_satlantic
+            # TODO _log_data add custom header matching files from HyperSAS
+            self._data_logger.registration = b''
+            self._data_logger.terminator = b'\r\n'
+        else:
+            self._data_logger = data_logger
 
         self._packet_Lt_raw = None
         self._packet_Lt_dark_raw = None
         self._packet_Li_raw = None
         self._packet_Li_dark_raw = None
+        self._packet_Es_raw = None
+        self._packet_Es_dark_raw = None
         self._packet_THS_raw = None
 
         self._packet_Lt_received = float('nan')
         self._packet_Lt_dark_received = float('nan')
         self._packet_Li_received = float('nan')
         self._packet_Li_dark_received = float('nan')
+        self._packet_Es_received = float('nan')
+        self._packet_Es_dark_received = float('nan')
         self._packet_THS_received = float('nan')
 
         self.Lt = None
         self.Lt_dark = None
         self.Li = None
         self.Li_dark = None
+        self.Es = None
+        self.Es_dark = None
         self.roll = float('nan')
         self.pitch = float('nan')
         self.compass = float('nan')      # Compass heading measured
@@ -663,14 +673,21 @@ class HyperSAS(Sensor):
         self.packet_Lt_dark_parsed = float('nan')
         self.packet_Li_parsed = float('nan')
         self.packet_Li_dark_parsed = float('nan')
+        self.packet_Es_parsed = float('nan')
+        self.packet_Es_dark_parsed = float('nan')
         self.packet_THS_parsed = float('nan')
 
         # Load device file
         self.__immersed = cfg.getboolean(self.__class__.__name__, 'immersed', fallback=False)
-        self._parser_device_file = cfg.get(self.__class__.__name__, 'sip')
-        self._parser = SatlanticParser(self._parser_device_file, self.__immersed)
+        if parser is None:
+            self._parser_device_file = cfg.get(self.__class__.__name__, 'sip')
+            self._parser = SatlanticParser(self._parser_device_file, self.__immersed)
+        else:
+            self._parser_device_file = None
+            self._parser = parser
         # Dispatcher
         self._dispatcher = {}
+        Es_frame_header = None
         for packet_header, cal in self._parser.cal.items():
             if 'SATTHS' in packet_header:
                 self._dispatcher[packet_header] = 'THS'
@@ -680,10 +697,15 @@ class HyperSAS(Sensor):
             elif 'LI_SATHSL' == cal.core_groupname:
                 self._dispatcher[packet_header] = 'Li'
                 Li_frame_header = packet_header
+            elif 'ES_SATHSE' == cal.core_groupname:
+                self._dispatcher[packet_header] = 'Es'
+                Es_frame_header = packet_header
             elif 'LT_SATHLD' == cal.core_groupname:
                 self._dispatcher[packet_header] = 'Lt_dark'
             elif 'LI_SATHLD' == cal.core_groupname:
                 self._dispatcher[packet_header] = 'Li_dark'
+            elif 'ES_SATHED' == cal.core_groupname:
+                self._dispatcher[packet_header] = 'Es_dark'
             else:
                 raise ValueError('Unable to find type of HyperSAS frame header.')
         # Wavelengths
@@ -691,6 +713,11 @@ class HyperSAS(Sensor):
                               for i in self._parser.cal[Lt_frame_header].core_variables]
         self.Li_wavelength = [float(self._parser.cal[Li_frame_header].id[i])
                               for i in self._parser.cal[Li_frame_header].core_variables]
+        if Es_frame_header:
+            self.Es_wavelength = [float(self._parser.cal[Es_frame_header].id[i])
+                                  for i in self._parser.cal[Es_frame_header].core_variables]
+        else:
+            self.Es_wavelength = float('nan')
         self.__missing_packet_header = []
 
     def set_parser(self, device_file):
@@ -742,49 +769,80 @@ class HyperSAS(Sensor):
         elif self._dispatcher[packet_header] == 'Li_dark':
             self._packet_Li_dark_raw = packet
             self._packet_Li_dark_received = timestamp
+        elif self._dispatcher[packet_header] == 'Es':
+            self._packet_Es_raw = packet
+            self._packet_Es_received = timestamp
+        elif self._dispatcher[packet_header] == 'Es_dark':
+            self._packet_Es_dark_raw = packet
+            self._packet_Es_dark_received = timestamp
 
     def parse_packets(self):
         """
         Parse packet received since last parsing. Called by UX
         """
-        # Parse THS
-        if self._packet_THS_received > self.packet_THS_parsed or \
-                (isnan(self.packet_THS_parsed) and not isnan(self._packet_THS_received)):
-            THS, _ = self._parser.parse_frame(self._packet_THS_raw)
-            self.packet_THS_parsed = time()
-            self.roll = THS['ROLL']
-            self.pitch = THS['PITCH']
-            self.compass = THS['COMP']
-        # Parse Lt Dark
-        if self._packet_Lt_dark_received > self.packet_Lt_dark_parsed or \
-                (isnan(self.packet_Lt_dark_parsed) and not isnan(self._packet_Lt_dark_received)):
-            Lt_dark, _ = self._parser.parse_frame(self._packet_Lt_dark_raw)
-            self.packet_Lt_dark_parsed = time()
-            self.Lt_dark = Lt_dark['LT_SATHLD']
-        # Parse Lt
-        if self._packet_Lt_received > self.packet_Lt_parsed or \
-                (isnan(self.packet_Lt_parsed) and not isnan(self._packet_Lt_received)):
-            Lt, _ = self._parser.parse_frame(self._packet_Lt_raw)
-            self.packet_Lt_parsed = time()
-            if self.Lt_dark is not None:
-                self.Lt = Lt['LT_SATHSL'] - self.Lt_dark
-            else:
-                self.Lt = Lt['LT_SATHSL']
-        # Parse Li Dark
-        if self._packet_Li_dark_received > self.packet_Li_dark_parsed or \
-                (isnan(self.packet_Li_dark_parsed) and not isnan(self._packet_Li_dark_received)):
-            Li_dark, _ = self._parser.parse_frame(self._packet_Li_dark_raw)
-            self.packet_Li_dark_parsed = time()
-            self.Li_dark = Li_dark['LI_SATHLD']
-        # Parse Li
-        if self._packet_Li_received > self.packet_Li_parsed or \
-                (isnan(self.packet_Li_parsed) and not isnan(self._packet_Li_received)):
-            Li, _ = self._parser.parse_frame(self._packet_Li_raw)
-            self.packet_Li_parsed = time()
-            if self.Li_dark is not None:
-                self.Li = Li['LI_SATHSL'] - self.Li_dark
-            else:
-                self.Li = Li['LI_SATHSL']
+        try:
+            # Parse THS
+            if self._packet_THS_received > self.packet_THS_parsed or \
+                    (isnan(self.packet_THS_parsed) and not isnan(self._packet_THS_received)):
+                THS, _ = self._parser.parse_frame(self._packet_THS_raw)
+                self.packet_THS_parsed = time()
+                self.roll = THS['ROLL']
+                self.pitch = THS['PITCH']
+                self.compass = THS['COMP']
+            # Parse Lt Dark
+            if self._packet_Lt_dark_received > self.packet_Lt_dark_parsed or \
+                    (isnan(self.packet_Lt_dark_parsed) and not isnan(self._packet_Lt_dark_received)):
+                Lt_dark, _ = self._parser.parse_frame(self._packet_Lt_dark_raw)
+                self.packet_Lt_dark_parsed = time()
+                self.Lt_dark = Lt_dark['LT_SATHLD']
+            # Parse Lt
+            if self._packet_Lt_received > self.packet_Lt_parsed or \
+                    (isnan(self.packet_Lt_parsed) and not isnan(self._packet_Lt_received)):
+                Lt, _ = self._parser.parse_frame(self._packet_Lt_raw)
+                self.packet_Lt_parsed = time()
+                if self.Lt_dark is not None:
+                    self.Lt = Lt['LT_SATHSL'] - self.Lt_dark
+                else:
+                    self.Lt = Lt['LT_SATHSL']
+            # Parse Li Dark
+            if self._packet_Li_dark_received > self.packet_Li_dark_parsed or \
+                    (isnan(self.packet_Li_dark_parsed) and not isnan(self._packet_Li_dark_received)):
+                Li_dark, _ = self._parser.parse_frame(self._packet_Li_dark_raw)
+                self.packet_Li_dark_parsed = time()
+                self.Li_dark = Li_dark['LI_SATHLD']
+            # Parse Li
+            if self._packet_Li_received > self.packet_Li_parsed or \
+                    (isnan(self.packet_Li_parsed) and not isnan(self._packet_Li_received)):
+                Li, _ = self._parser.parse_frame(self._packet_Li_raw)
+                self.packet_Li_parsed = time()
+                if self.Li_dark is not None:
+                    self.Li = Li['LI_SATHSL'] - self.Li_dark
+                else:
+                    self.Li = Li['LI_SATHSL']
+            # Parse Es Dark
+            if self._packet_Es_dark_received > self.packet_Es_dark_parsed or \
+                    (isnan(self.packet_Es_dark_parsed) and not isnan(self._packet_Es_dark_received)):
+                Es_dark, _ = self._parser.parse_frame(self._packet_Es_dark_raw)
+                self.packet_Es_dark_parsed = time()
+                self.Es_dark = Es_dark['ES_SATHED']
+            # Parse Es
+            if self._packet_Es_received > self.packet_Es_parsed or \
+                    (isnan(self.packet_Es_parsed) and not isnan(self._packet_Es_received)):
+                Es, _ = self._parser.parse_frame(self._packet_Es_raw)
+                self.packet_Es_parsed = time()
+                if self.Es_dark is not None:
+                    self.Es = Es['ES_SATHSE'] - self.Es_dark
+                else:
+                    self.Es = Es['ES_SATHSE']
+        except SatlanticFrameError as e:
+            self.__logger.error(e)
+
+
+class Es(HyperSAS):
+
+    def __init__(self, cfg, data_logger=None, parser=None):
+        super().__init__(cfg, data_logger, parser)
+        self.__logger = logging.getLogger(self.__class__.__name__)
 
 
 if __name__ == '__main__':

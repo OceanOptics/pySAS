@@ -53,33 +53,39 @@ controls_layout = [
                                                {'label': "Auto", 'value': 'auto'}]),
                            width=8),
                    ], row=True),
-    dbc.FormGroup([dbc.Label(core_instruments_names, html_for="hypersas_activate", width=4),
+    dbc.FormGroup([dbc.Label(core_instruments_names, html_for="hypersas_activate", width=4, className='text-nowrap'),
                    dbc.Col([dbc.Checklist(id="hypersas_switch", switch=True, inline=False,
                                           # value=['on'] if runner.hypersas.alive else [],
                                           options=[{'label': "", 'value': 'on'}],
-                                          style={'marginRight': '-0.5em'}),
+                                          style={'marginRight': '-0.5em'},
+                                          className='mt-1 ml-1'),
                             dbc.Badge("Logging", id='hypersas_status', pill=True, color="success",
-                                      className="mt-2 ml-1 d-none")],
-                           width=8, className='text-right'),
+                                      className="mt-2 ml-1 d-none")
+                            ], width=8, className='text-right'),
                    ], row=True),
     # Switch toggle to status badge when in automatic mode
-    dbc.FormGroup([dbc.Label("GPS", html_for="gps_status", width=3),
+    dbc.FormGroup([dbc.Label("GPS", html_for="gps_status", width=3, className='text-nowrap'),
                    dbc.Col([dbc.Badge("???", id='gps_flag_fix', pill=True, color="light", className="mt-2 ml-1"),
                             dbc.Badge("???", id='gps_flag_hdg', pill=True, color="light", className="mt-2 ml-1"),
-                            dbc.Badge("No Time", id='gps_flag_time', pill=True, color="danger", className="mt-2 ml-1")],
-                           width=9, className='text-right'),
+                            dbc.Badge("No Time", id='gps_flag_time', pill=True, color="danger", className="mt-2 ml-1"),
+                            dbc.Checklist(id="gps_switch", switch=True, inline=False,
+                                          # value=['on'] if runner.gps.alive else [],
+                                          options=[{'label': "", 'value': 'on'}],
+                                          style={'marginRight': '-0.5em', 'display': 'inline-block'},
+                                          className='mt-1 ml-1'),
+                            ], width=9, className='text-right'),
                    ], row=True),
     dbc.FormGroup(
-        [dbc.Label("Tower 69°", id='tower_label', html_for="indexing_table_status", width=5, className='text-nowrap'),
-         dbc.Col([dbc.Checklist(id="tower_switch", switch=True, inline=True,
-                                # value=['on'] if runner.indexing_table.alive else [],
-                                options=[{'label': "", 'value': 'on'}], className="mt-1 mr-0")],
-                 width=3, className='text-right'),
+        [dbc.Label("Tower 69°", id='tower_label', html_for="indexing_table_status", width=3, className='text-nowrap'),
          dbc.Col([dbc.Badge("Stall", id='tower_stall_flag', pill=True, href="#", color="danger", className="mt-2 ml-1"),
-                  dbc.Badge("Zero", id='tower_zero', pill=True, href="#", color="secondary", className="mt-2 ml-1")],
-                 width=4, className='text-right', style={'paddingLeft': '0px'}),
-
-         ], row=True),
+                  dbc.Badge("Zero", id='tower_zero', pill=True, href="#", color="secondary", className="mt-2 ml-1"),
+                  dbc.Checklist(id="tower_switch", switch=True, inline=False,
+                                # value=['on'] if runner.indexing_table.alive else [],
+                                options=[{'label': "", 'value': 'on'}],
+                                style={'marginRight': '-0.5em', 'display': 'inline-block'},
+                                className="mt-1 ml-1")
+                  ], width=9, className='text-right'),
+        ], row=True),
     dcc.Slider(id='tower_orientation', min=-180, max=180, step=1, value=96, included=False, disabled=False,
                marks={i: '{}°'.format(i) for i in [-160, -80, 0, 80, 160]},
                tooltip={'always_visible': False, 'placement': 'bottom'},
@@ -164,6 +170,7 @@ app.layout = dbc.Container([dbc.Row([
     html.Div(id='get_switch_n_updates', className='d-none'),
     html.Div(id='get_switch_last_n_updates', className='d-none'),
     html.Div(id='get_switch_last_n_updates_2', className='d-none'),
+    html.Div(id='get_gps_switch_last_n_updates', className='d-none'),
     dbc.Button(id='load_settings', className='d-none'),
     html.Div(id='tower_valid_orientation_init', className='d-none'),
     html.Div(id='tower_reverse_valid_orientation_init', className='d-none'),
@@ -209,30 +216,31 @@ def update_time(_):
 # Operation Mode
 @app.callback([Output('tower_switch', 'className'),
                Output('tower_orientation', 'className'), Output('tower_zero', 'className'),
+               Output('gps_switch', 'className'),
                Output('hypersas_switch', 'className'), Output('hypersas_status', 'className'),
                Output('operation_mode_last_value', 'children'), Output('tower_switch_last_value', 'children'),
                Output('get_switch_last_n_updates', 'children')],
               [Input('operation_mode', 'value'), Input('tower_switch', 'value')],
               [State('operation_mode_last_value', 'children'), State('tower_switch_last_value', 'children'),
                State('get_switch_n_updates', 'children'), State('get_switch_last_n_updates', 'children')])
-def set_operation_mode_tower(operation_mode, tower_switch, operation_mode_previous, tower_switch_previous,
-                             get_switch_n_updates, get_switch_last_n_updates):
+def set_operation_mode(operation_mode, tower_switch, operation_mode_previous, tower_switch_previous,
+                       get_switch_n_updates, get_switch_last_n_updates):
     trigger = dash.callback_context.triggered[0]['prop_id']
-    logger.debug('set_operation_mode_tower: ' + str(operation_mode) + ', ' + str(tower_switch) + ', ' +
+    logger.debug('set_operation_mode: ' + str(operation_mode) + ', ' + str(tower_switch) + ', ' +
                  str(operation_mode_previous) + ', ' + str(tower_switch_previous) + ', ' +
                  str(get_switch_n_updates) + ', ' + str(get_switch_last_n_updates) + ', ' + trigger)
     if operation_mode is None and tower_switch is None:
-        logger.debug('set_operation_mode_tower: loading')
+        logger.debug('set_operation_mode: loading')
         raise dash.exceptions.PreventUpdate()
     if trigger == 'operation_mode.value':
         if operation_mode not in ['auto', 'manual']:
-            logger.warning('set_operation_mode_tower: invalid operation mode ' + str(operation_mode))
+            logger.warning('set_operation_mode: invalid operation mode ' + str(operation_mode))
             raise dash.exceptions.PreventUpdate()
         if operation_mode == operation_mode_previous:
-            logger.debug('set_operation_mode_tower: operation_mode already up to date')
+            logger.debug('set_operation_mode: operation_mode already up to date')
             raise dash.exceptions.PreventUpdate()
         if operation_mode_previous is None:
-            logger.debug('set_operation_mode_tower: init operation_mode')
+            logger.debug('set_operation_mode: init operation_mode')
         else:
             runner.operation_mode = operation_mode
             runner.set_cfg_variable('Runner', 'operation_mode', operation_mode)
@@ -242,36 +250,38 @@ def set_operation_mode_tower(operation_mode, tower_switch, operation_mode_previo
                 runner.stop_auto()
     elif trigger == 'tower_switch.value':
         if get_switch_n_updates != get_switch_last_n_updates:
-            logger.debug('set_operation_mode_tower: called by get_switch')
+            logger.debug('set_operation_mode: called by get_switch')
             return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, \
-                   dash.no_update, get_switch_n_updates
+                   dash.no_update, dash.no_update, get_switch_n_updates
         if tower_switch not in [["on"], []]:
-            logger.warning('set_operation_mode_tower: invalid tower switch ' + str(tower_switch))
+            logger.warning('set_operation_mode: invalid tower switch ' + str(tower_switch))
             raise dash.exceptions.PreventUpdate()
         if tower_switch == tower_switch_previous:
-            logger.debug('set_operation_mode_tower: tower_switch already up to date')
+            logger.debug('set_operation_mode: tower_switch already up to date')
             raise dash.exceptions.PreventUpdate()
         if runner.operation_mode != 'manual':
-            logger.debug('set_operation_mode_tower: tower_switch modification unauthorized')
+            logger.debug('set_operation_mode: tower_switch modification unauthorized')
             raise dash.exceptions.PreventUpdate()
         if tower_switch_previous is None:
-            logger.debug('set_operation_mode_tower: init tower_switch')
+            logger.debug('set_operation_mode: init tower_switch')
         else:
             if tower_switch:
-                runner.indexing_table.start()
+                if not runner.indexing_table.start():
+                    logger.debug('unable to start indexing tower')
             else:
                 runner.indexing_table.stop()
     # Get Operation Mode
-    tower_switch_class_name = 'mt-1 mr-0'
+    tower_switch_class_name = 'mt-1 ml-1'
     tower_orientation_class_name = 'wide-slider'
     tower_zero_class_name = 'mt-2 ml-1'
-    hypersas_switch_class_name = 'mt-1'
+    gps_switch_class_name = 'mt-1 ml-1'
+    hypersas_switch_class_name = 'mt-1 ml-1'
     hypersas_status_class_name = 'mt-2 ml-1'
-    # hypersas_switch_value = []
     if runner.operation_mode == 'auto':
         tower_switch_class_name = 'd-none'
         tower_orientation_class_name = 'd-none'
         tower_zero_class_name = 'd-none'
+        gps_switch_class_name = 'd-none'
         hypersas_switch_class_name = 'd-none'
     elif runner.operation_mode == 'manual':
         hypersas_status_class_name = 'd-none'
@@ -280,32 +290,40 @@ def set_operation_mode_tower(operation_mode, tower_switch, operation_mode_previo
             tower_orientation_class_name = 'd-none'
             tower_zero_class_name = 'd-none'
     # Update UI
-    return tower_switch_class_name, tower_orientation_class_name, tower_zero_class_name, \
+    return tower_switch_class_name, tower_orientation_class_name, tower_zero_class_name, gps_switch_class_name, \
            hypersas_switch_class_name, hypersas_status_class_name, operation_mode, tower_switch, dash.no_update
 
 
-@app.callback([Output('hypersas_switch', 'value'), Output('tower_switch', 'value'),
+@app.callback([Output('hypersas_switch', 'value'), Output('gps_switch', 'value'), Output('tower_switch', 'value'),
                Output('get_switch_n_updates', 'children')],
               [Input('status_refresh_interval', 'n_intervals')],
-              [State('hypersas_switch', 'value'), State('tower_switch', 'value'),
+              [State('hypersas_switch', 'value'), State('gps_switch', 'value'), State('tower_switch', 'value'),
                State('get_switch_n_updates', 'children')])
-def get_switch(n_intervals, current_hypersas_switch_value, current_tower_switch_value, n_updates):
+def get_switch(n_intervals, current_hypersas_switch_value, current_gps_switch_value, current_tower_switch_value,
+               n_updates):
     if n_intervals is None:
         logger.debug('get_switch: loading')
     elif runner.operation_mode == 'manual':
         raise dash.exceptions.PreventUpdate()
-    hypersas_switch_value = []
-    tower_switch_value = []
     if runner.hypersas.alive:
         hypersas_switch_value = ['on']
+    else:
+        hypersas_switch_value = []
+    if runner.gps.alive:
+        gps_switch_value = ['on']
+    else:
+        gps_switch_value = []
     if runner.indexing_table.alive:
         tower_switch_value = ['on']
+    else:
+        tower_switch_value = []
     if hypersas_switch_value == current_hypersas_switch_value and \
+            gps_switch_value == current_gps_switch_value and \
             tower_switch_value == current_tower_switch_value:
         raise dash.exceptions.PreventUpdate()
-    # Update counter to prevent chained callback of set_operation_mode_tower
+    # Update counter to prevent chained callback of set_operation_mode
     n_updates = 1 if n_updates is None else n_updates + 1
-    return hypersas_switch_value, tower_switch_value, n_updates
+    return hypersas_switch_value, gps_switch_value, tower_switch_value, n_updates
 
 
 ##########
@@ -335,7 +353,7 @@ def set_hypersas_switch(value, _, get_switch_n_updates, get_switch_last_n_update
             if runner.es:
                 runner.es.stop()
     elif trigger == 'hypersas_switch.className':
-        logger.debug('set_hypersas_switch: called by set_operation_mode_tower')
+        logger.debug('set_hypersas_switch: called by set_operation_mode')
     raise dash.exceptions.PreventUpdate()
 
 
@@ -355,34 +373,63 @@ def get_hypersas_status(_, state):
 
 ##########
 # GPS
-@app.callback([Output('gps_flag_hdg', 'children'), Output('gps_flag_hdg', 'color'),
-               Output('gps_flag_fix', 'children'), Output('gps_flag_fix', 'color'),
+@app.callback(Output('get_gps_switch_last_n_updates', 'children'), [Input('gps_switch', 'value')],
+              [State('get_switch_n_updates', 'children'), State('get_gps_switch_last_n_updates', 'children')])
+def set_gps_switch(value, get_switch_n_updates, get_switch_last_n_updates):
+    trigger = dash.callback_context.triggered[0]['prop_id']
+    if value is None:
+        logger.debug('set_gps_switch: loading')
+        raise dash.exceptions.PreventUpdate()
+    if get_switch_n_updates != get_switch_last_n_updates:
+        logger.debug('set_gps_switch: called by get_switch')
+        return get_switch_n_updates
+    if trigger == 'gps_switch.value':
+        if value == ['on']:
+            logger.debug('set_gps_switch: start')
+            runner.gps.start()
+        else:
+            logger.debug('set_gps_switch: stop')
+            runner.gps.stop()
+    elif trigger == 'set_gps_switch.className':
+        logger.debug('set_gps_switch: called by set_operation_mode')
+    raise dash.exceptions.PreventUpdate()
+
+
+@app.callback([Output('gps_flag_hdg', 'children'), Output('gps_flag_hdg', 'color'), Output('gps_flag_hdg', 'className'),
+               Output('gps_flag_fix', 'children'), Output('gps_flag_fix', 'color'), Output('gps_flag_fix', 'className'),
                Output('gps_flag_time', 'className')],
               [Input('status_refresh_interval', 'n_intervals')])
 def get_gps_flags(_):
-    if time() - runner.gps.packet_relposned_received > runner.DATA_EXPIRED_DELAY:
-        hdg = 'No Hdg', 'warning'
+    if runner.operation_mode == 'manual' and not runner.gps.alive:
+        return dash.no_update, dash.no_update, 'd-none', \
+               dash.no_update, dash.no_update, 'd-none', \
+               'd-none'
+
+    if runner.gps.fix_type < 2:
+        hdg = 'No Hdg', 'warning', 'd-none'
+    elif time() - runner.gps.packet_relposned_received > runner.DATA_EXPIRED_DELAY:
+        hdg = 'No Hdg', 'warning', 'mt-2 ml-1'
     elif runner.gps.heading_valid:
-        hdg = 'Hdg', 'success'
+        hdg = 'Hdg', 'success', 'mt-2 ml-1'
     else:
-        hdg = 'No Hdg', 'danger'
+        hdg = 'No Hdg', 'danger', 'mt-2 ml-1'
 
     if time() - runner.gps.packet_pvt_received > runner.DATA_EXPIRED_DELAY:
-        fix = 'Off', 'warning'
+        fix = 'Off', 'warning', 'mt-2 ml-1'
     elif runner.gps.fix_type == 0:
-        fix = 'No Fix', 'danger'
+        fix = 'No Fix', 'danger', 'mt-2 ml-1'
     elif runner.gps.fix_type == 1:  # Dead reckoning
-        fix = 'DR', 'warning'
+        fix = 'DR', 'warning', 'mt-2 ml-1'
     elif runner.gps.fix_type == 2:
-        fix = '2D-Fix', 'info'
+        fix = '2D-Fix', 'info', 'mt-2 ml-1'
     elif runner.gps.fix_type == 3:
-        fix = '3D-Fix', 'success'
+        fix = '3D-Fix', 'success', 'mt-2 ml-1'
     elif runner.gps.fix_type == 4:
-        fix = 'GNSS+DR', 'info'
+        fix = 'GNSS+DR', 'info', 'mt-2 ml-1'
     elif runner.gps.fix_type == 5:
-        fix = 'Time Only', 'warning'
+        fix = 'Time Only', 'warning', 'mt-2 ml-1'
     else:
-        fix = 'Unknown', 'danger'
+        fix = 'Unknown', 'danger', 'mt-2 ml-1'
 
     if runner.gps.datetime_valid:
         dt = 'd-none',
@@ -456,7 +503,7 @@ def set_tower_orientation(orientation, _, _2, label_state, zero_n_clicks, zero_n
             raise dash.exceptions.PreventUpdate()
         return tower_label, zero_n_clicks
     if trigger == 'tower_orientation.className':
-        logger.debug('set_tower_orientation: called by set_operation_mode_tower')
+        logger.debug('set_tower_orientation: called by set_operation_mode')
         raise dash.exceptions.PreventUpdate()
     if trigger == 'tower_orientation.value':
         if orientation is None:
@@ -772,7 +819,7 @@ def update_error_modal(_):
     # else:
     #     return msg, False
 
-# TODO Add Warning Modal by using filter in logginig
+# TODO Add Warning Modal by using filter in logging
 # class MyFilter(object):
 #     def __init__(self, level):
 #         self.__level = level

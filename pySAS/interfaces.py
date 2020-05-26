@@ -530,6 +530,8 @@ class GPS(Sensor):
 
     def start_logging(self):
         self.__logger.debug('start logging')
+        if not self.alive:
+            self.__logger.warning('GPS is not alive')
         self._log_data = True
 
     def stop_logging(self):

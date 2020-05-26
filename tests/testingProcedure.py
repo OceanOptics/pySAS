@@ -18,12 +18,13 @@ class TestingProcedure:
         # Controllers & Sensors
         self.gps = GPS(self.cfg)
         self.indexing_table = IndexingTable(self.cfg)
-        #self.hypersas = HyperSAS(self.cfg)
+        self.hypersas = HyperSAS(self.cfg)
 
     def start_sensors(self):
         self.gps.start()
         self.gps.start_logging()
         self.indexing_table.start()
+        self.hypersas.start()
 
     def run(self):
         self.start_sensors()

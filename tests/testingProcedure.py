@@ -14,6 +14,7 @@ from pySAS.runner import get_true_north_heading, normalize_angle
 class TestingProcedure:
     def __init__(self, cfg_filename=None):
         self.cfg = configparser.ConfigParser()
+        self.cfg.read(cfg_filename)
 
         # Controllers & Sensors
         self.gps = GPS(self.cfg)

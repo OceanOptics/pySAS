@@ -342,9 +342,6 @@ class IndexingTable:
 
 class Sensor:
 
-    TERMINATOR = b'\r\n'
-    MAX_BUFFER_LENGTH = 16384
-
     def __new__(cls, *args, **kwargs):
         """
         Create new instance of Sensor for each serial port
@@ -379,7 +376,6 @@ class Sensor:
                                  'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
         # Serial
         self._serial = get_serial_instance(self.__class__.__name__, cfg)
-        self._buffer = bytearray()
         # GPIO
         try:
             # Try to load physical pin factory (Factory())
@@ -422,41 +418,10 @@ class Sensor:
             if not from_thread:
                 self._thread.join(2)
                 if self._thread.is_alive():
-                    self.__logger.error('Thread of ' + self.__class__.__name__ + ' did not join.')
+                    self.__logger.error('Thread did not join.')
             self._serial.close()
             self._relay.off()
             self._data_logger.close()  # Required to start new log_data file when instrument restart
-
-    def run(self):
-        while self.alive: # and self._serial.is_open:
-            try:
-                data = self._serial.read(self._serial.in_waiting or 1)
-                if data:
-                    try:
-                        self.data_received(data)
-                        if len(self._buffer) > self.MAX_BUFFER_LENGTH:
-                            self.__logger.error('Buffer exceeded maximum length. Buffer emptied to prevent overflow')
-                            self._buffer = bytearray()
-                    except Exception as e:
-                        self.__logger.error(e)
-                        sleep(1)
-            except SerialException as e:
-                self.__logger.error(e)
-                self.stop(from_thread=True)
-
-    def data_received(self, data):
-        self._buffer.extend(data)
-        while self.TERMINATOR in self._buffer:
-            packet, self._buffer = self._buffer.split(self.TERMINATOR, 1)
-            try:
-                self.handle_packet(packet)
-            except Exception as e:
-                self.__logger.error(e)
-                self.__logger.debug(packet)
-
-    def handle_packet(self, packet):
-        timestamp = time()
-        self._data_logger.write(packet, timestamp)
 
 
 class GPS(Sensor):
@@ -532,7 +497,7 @@ class GPS(Sensor):
     def start_logging(self):
         self.__logger.debug('start logging')
         if not self.alive:
-            self.__logger.warning('not alive')
+            self.__logger.info('not alive')
         self._log_data = True
 
     def stop_logging(self):
@@ -550,8 +515,9 @@ class GPS(Sensor):
         while self.alive:
             try:
                 packet = self._parser.receive_from(self._serial)
+                timestamp = time()
                 if packet:
-                    self.handle_packet(packet)
+                    self.handle_packet(packet, timestamp)
             except OSError as e:
                 self.__logger.error(e)
                 self.__logger.error('device disconnected or multiple access on port?')
@@ -563,10 +529,7 @@ class GPS(Sensor):
                 self.__logger.error(e)
                 sleep(1)
 
-    def handle_packet(self, packet):
-        timestamp = time()
-        # self.__logger.debug(str(packet))
-
+    def handle_packet(self, packet, timestamp):
         if packet[1] == 'PVT':
             # Get date and time
             self.datetime = datetime(packet[2].year, packet[2].month, packet[2].day,
@@ -624,7 +587,9 @@ class GPS(Sensor):
                 self.__logger.error('unable to acquire data_logger to write data')
 
 
-class HyperSAS(Sensor):
+class HyperOCR(Sensor):
+
+    MAX_BUFFER_LENGTH = 16384
 
     def __init__(self, cfg, data_logger=None, parser=None):
         super().__init__(cfg)
@@ -641,6 +606,8 @@ class HyperSAS(Sensor):
             self._data_logger.terminator = b'\r\n'
         else:
             self._data_logger = data_logger
+
+        self._buffer = bytearray()
 
         self._packet_Lt_raw = None
         self._packet_Lt_dark_raw = None
@@ -734,26 +701,40 @@ class HyperSAS(Sensor):
         if was_alive:
             self.start()
 
-    def handle_packet(self, packet):
-        """
-        Handle any type of packet received trough the serial port
-        :param packet:
-        :return:
-        """
-        timestamp = time()
-        self._data_logger.write(packet, timestamp)
+    def run(self):
+        while self.alive: # and self._serial.is_open:
+            try:
+                data = self._serial.read(self._serial.in_waiting or 1)
+                timestamp = time()
+                if data:
+                    try:
+                        self.data_received(data, timestamp)
+                        if len(self._buffer) > self.MAX_BUFFER_LENGTH:
+                            self.__logger.error('Buffer exceeded maximum length. Buffer emptied to prevent overflow')
+                            self._buffer = bytearray()
+                    except Exception as e:
+                        self.__logger.error(e)
+                        sleep(1)
+            except SerialException as e:
+                self.__logger.error(e)
+                self.stop(from_thread=True)
 
-        # Get packet header
-        packet_header = packet[0:10].decode(self._parser.ENCODING, self._parser.UNICODE_HANDLING)
-        if not packet_header:
-            self.__logger.error('Unable to resolve packet header.')
-        if packet_header not in self._dispatcher.keys():
-            if packet_header not in self.__missing_packet_header:
-                self.__missing_packet_header.append(packet_header)
-                self.__logger.warning('Unknown packet header: ' + str(packet_header))
-            return
+    def data_received(self, data, timestamp):
+        self._buffer.extend(data)
+        packet = True
+        while packet:
+            packet, packet_header, self._buffer, unknown_bytes = self._parser.find_frame(self._buffer)
+            if unknown_bytes:
+                self._data_logger.write(unknown_bytes, timestamp)
+                unknown_bytes_header = unknown_bytes[0:10].decode(self._parser.ENCODING, self._parser.UNICODE_HANDLING)
+                if unknown_bytes_header not in self.__missing_packet_header:
+                    self.__missing_packet_header.append(unknown_bytes_header)
+                    self.__logger.info('Data logged not registered: ' + str(unknown_bytes_header) + '...')
+            if packet:
+                self._data_logger.write(packet, timestamp)
+                self.dispatch_packet(packet_header, packet, timestamp)
 
-        # Dispatch packet
+    def dispatch_packet(self, packet_header, packet, timestamp):
         if self._dispatcher[packet_header] == 'THS':
             self._packet_THS_raw = packet
             self._packet_THS_received = timestamp
@@ -838,7 +819,14 @@ class HyperSAS(Sensor):
             self.__logger.error(e)
 
 
-class Es(HyperSAS):
+class HyperSAS(HyperOCR):
+
+    def __init__(self, cfg, data_logger=None, parser=None):
+        super().__init__(cfg, data_logger, parser)
+        self.__logger = logging.getLogger(self.__class__.__name__)
+
+
+class Es(HyperOCR):
 
     def __init__(self, cfg, data_logger=None, parser=None):
         super().__init__(cfg, data_logger, parser)

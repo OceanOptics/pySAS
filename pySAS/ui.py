@@ -14,7 +14,7 @@ from pySAS.runner import Runner
 
 
 STATUS_REFRESH_INTERVAL = 1000
-HYPERSAS_READING_INTERVAL = 5000
+HYPERSAS_READING_INTERVAL = 2000
 
 runner = Runner(CFG_FILENAME)
 
@@ -36,6 +36,12 @@ if runner.es is not None:
     core_instruments_names = "HyperSAS+Es"
 else:
     core_instruments_names = "HyperSAS"
+
+# Graph options
+graph_config = {'displaylogo': False, 'editable': False, 'displayModeBar': False, 'showTips': False}
+                # 'modeBarButtonsToRemove': ["toImage", "sendDataToCloud",
+                #                            "select2d", "lasso2d", "zoomIn2d", "zoomOut2d", "autoScale2d",
+                #                            "hoverClosestCartesian", "hoverCompareCartesian"]}
 
 controls_layout = [
     dcc.Location(id='location', refresh=True),
@@ -147,9 +153,9 @@ controls_layout = [
 app.layout = dbc.Container([dbc.Row([
     html.Main([
         dbc.Row([
-            dbc.Col(dcc.Graph(id='figure_system_orientation', style={'height': '100%'}), md=4),
+            dbc.Col(dcc.Graph(id='figure_system_orientation', style={'height': '100%'}, config=graph_config), md=4),
             # dbc.Col(figure_system_orientation, md=4),
-            dbc.Col(dcc.Graph(id='figure_spectrums', style={'height': '100%'}), md=8)
+            dbc.Col(dcc.Graph(id='figure_spectrums', style={'height': '100%'}, config=graph_config), md=8)
             # dbc.Col(figure_last_spectrum, md=8)
         ], className='h-50'),
         dbc.Row([

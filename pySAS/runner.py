@@ -285,7 +285,7 @@ class Runner:
 
     def halt(self):
         if self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=False):
-            run("sleep 30 && sudo shutdown -h now", shell=True)
+            run("sleep 5 && sudo shutdown -h now", shell=True)
             # TODO Test on RPi
             # TODO add 5 second before shutting down to make sure ui is still responsive
             # TODO check if non blocking needed using Popen

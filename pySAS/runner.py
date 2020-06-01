@@ -3,7 +3,7 @@ import configparser
 from time import gmtime, time, sleep
 from math import isnan
 import atexit
-from subprocess import call
+import subprocess
 from threading import Thread
 from pySAS.interfaces import IndexingTable, GPS, HyperSAS, Es
 from pySAS import WORLD_MAGNETIC_MODEL
@@ -285,7 +285,10 @@ class Runner:
 
     def halt(self):
         if self.cfg.getboolean('Runner', 'halt_on_exit', fallback=False):
-            call(["sudo", "shutdown", "-h", "now"], shell=True)
+            command = "/usr/bin/sudo /sbin/shutdown -h now"
+            process = subprocess.Popen(command.split(), stdout=subprocess.PIPE)
+            output = process.communicate()[0]
+            print(output)
             # TODO Test on RPi
             # TODO add 5 second before shutting down to make sure ui is still responsive
             # TODO check if non blocking needed using Popen

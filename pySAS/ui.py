@@ -684,32 +684,33 @@ def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse
             auto_pilot_limits.reverse()
     else:
         auto_pilot_limits = runner.pilot.tower_limits
-    # Get ship heading
-    ship = float('nan')
-    if timestamp - runner.ship_heading_timestamp < runner.DATA_EXPIRED_DELAY:
-        ship = runner.ship_heading
-    # Get sun
-    sun = float('nan')
-    if timestamp - runner.sun_position_timestamp < runner.DATA_EXPIRED_DELAY:
-        sun = runner.sun_azimuth
-    # Get Tower
-    tower = ship + tower
-    # Get HyperSAS Heading
-    ths = float('nan')
-    if timestamp - runner.hypersas.packet_THS_parsed < runner.DATA_EXPIRED_DELAY:
-        ths = runner.hypersas.compass_adj
-    # Get motion heading
-    motion = float('nan')
-    if timestamp - runner.gps.packet_pvt_received < runner.DATA_EXPIRED_DELAY and \
-            runner.gps.speed > 1:  # speed greater than 1 m/s -> 3.6 km/h
-        motion = runner.gps.heading_motion
-    # Assume autopilot_limits is in range -180 180
-    # auto_pilot_limits_360 = [a % 360 for a in auto_pilot_limits]
+    # Compute blind zone to display
     if auto_pilot_limits[1] > auto_pilot_limits[0]:
         blind_zone_width = 360 - (auto_pilot_limits[1] - auto_pilot_limits[0])
     else:
         blind_zone_width = auto_pilot_limits[0] - auto_pilot_limits[1]
-    blind_zone_center = ship + auto_pilot_limits[1] + blind_zone_width / 2
+    blind_zone_center = auto_pilot_limits[1] + blind_zone_width / 2
+    # Get ship heading
+    ship = float('nan')
+    if timestamp - runner.ship_heading_timestamp < runner.DATA_EXPIRED_DELAY:
+        ship = runner.ship_heading
+        # Adjust Tower to ship referencial
+        tower = ship + tower
+        # Adjust blind zone to ship referencial
+        blind_zone_center = ship + blind_zone_center
+    # Get sun  (need GPS for time and location)
+    sun = float('nan')
+    if timestamp - runner.sun_position_timestamp < runner.DATA_EXPIRED_DELAY:
+        sun = runner.sun_azimuth
+    # Get HyperSAS Heading  (need GPS for magnetic correction)
+    ths = float('nan')
+    if timestamp - runner.hypersas.packet_THS_parsed < runner.DATA_EXPIRED_DELAY:
+        ths = runner.hypersas.compass_adj
+    # Get motion heading from GPS
+    motion = float('nan')
+    if timestamp - runner.gps.packet_pvt_received < runner.DATA_EXPIRED_DELAY and \
+            runner.gps.speed > 1:  # speed greater than 1 m/s -> 3.6 km/h
+        motion = runner.gps.heading_motion
 
     traces = []
     if not isnan(tower):
@@ -802,7 +803,7 @@ def update_figure_spectrum(_):
                                      marker={'color': 'orange'}))
     # Set Layout
     layout = go.Layout(
-        title='HyperSAS Spectrum',
+        title=core_instruments_names + ' Spectrum',
         showlegend=True,
         legend=dict(
             x=1.0,

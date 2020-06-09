@@ -1,7 +1,31 @@
 import configparser
-import os
-import time
+from time import sleep
 from pySAS.interfaces import IndexingTable, GPS, HyperSAS
+
+
+class SlowIndexingTable(IndexingTable):
+
+    def set_configuration(self):
+        self._serial.write(b'\x03')  # ctrl+c for resetting motor  # TODO Might Loose zero position due to that
+        self._log_data.write([float('nan'), 'nan', 'set_cfg'], time())
+        sleep(0.5)                   # Reset takes longer than standard COMMAND_EXECUTION_TIME
+        # Settings motor configuration
+        self._serial.write(bytes('ee=1' + self.TERMINATOR, self.ENCODING))  # First command so no need for registration (backspace)
+        sleep(self.COMMAND_EXECUTION_TIME)
+        self._serial.write(bytes(self.REGISTRATOR + 'a=20000' + self.TERMINATOR, self.ENCODING))
+        sleep(self.COMMAND_EXECUTION_TIME)
+        self._serial.write(bytes(self.REGISTRATOR + 'd=20000' + self.TERMINATOR, self.ENCODING))
+        sleep(self.COMMAND_EXECUTION_TIME)
+        self._serial.write(bytes(self.REGISTRATOR + 'vi=78' + self.TERMINATOR, self.ENCODING))
+        sleep(self.COMMAND_EXECUTION_TIME)
+        self._serial.write(bytes(self.REGISTRATOR + 'vm=2000' + self.TERMINATOR, self.ENCODING))
+        sleep(self.COMMAND_EXECUTION_TIME)
+        self._serial.write(bytes(self.REGISTRATOR + 'em=1' + self.TERMINATOR, self.ENCODING))
+        sleep(self.COMMAND_EXECUTION_TIME)
+        # Log initialization
+        msg = self._serial_read()
+        if msg:
+            self.__logger.debug(msg.decode(self.ENCODING, self.UNICODE_HANDLING))
 
 
 class TestingProcedure:
@@ -11,7 +35,7 @@ class TestingProcedure:
         self.cfg.read(cfg_filename)
 
         # Controllers & Sensors
-        self.indexing_table = IndexingTable(self.cfg)
+        self.indexing_table = SlowIndexingTable(self.cfg)
         self.hypersas = HyperSAS(self.cfg)
 
         # GPS Starts on initiation to obtain fix
@@ -33,38 +57,41 @@ class TestingProcedure:
         self.indexing_table.stop()
 
 
-    def run(self, step_angle, trials=1, stop_gps=False):
+    def run(self, rotations=1, stop_gps=False):
         """Positions tower by step_angle degrees for user-set number of trials"""
         self.start_sensors()
-        for i in range(trials):
-            for j in range(-180, 181, step_angle):
-                self.indexing_table.set_position(j, check_stall_flag=True)
-
-                # This piece is to ensure the proper parsing of the HyperSAS data
-                self.hypersas.parse_packets()
-                print(self.hypersas.packet_THS_parsed)
-                print(self.hypersas.packet_Li_dark_parsed)
-                print(self.hypersas.packet_Li_parsed)
-
-                time.sleep(3)
-
+        for i in range(rotations):
+            self.indexing_table.set_position(-180, check_stall_flag=True)
+            self.indexing_table.set_position(180, check_stall_flag=True)
+            self.indexing_table.set_position(0, check_stall_flag=True)
         self.stop_sensors(stop_gps)
+
+
+    def zero_run(self):
+        """Used to provide accurate zero for validation"""
+        self.gps.start_logging()
+        for i in range(180):
+            print("Fix Type: " + str(self.gps.fix_type) + "\t Time left: "+str(180-i)+" s")
+            sleep(1)
+        self.gps.stop_logging()
 
 
 if __name__ == "__main__":
     # Assumes testingProcedure is being launched from it's directory, otherwise enter path fo cfg_path
     # cfg_path =
-    up_dir = os.path.dirname(os.getcwd())
-    cfg_path = os.path.join(up_dir, 'pySAS/pysas_cfg.ini')
+    #up_dir = os.path.dirname(os.getcwd())
+    cfg_path = 'pySAS/pysas_cfg.ini'
     tp = TestingProcedure(cfg_path)
 
-    # Obtain GPS fix before running trials
-    time.sleep(60)
+    #Start Countdown
+    for i in range(30):
+        print(str(30-i))
+        sleep(1)
 
     # Run configuration: run(step_angle, trials, stop_gps)
-    # stop_gps should be True on last run
-    tp.run(1)
+    tp.zero_run()
     tp.run(5)
-    tp.run(15, 2, True)
+    tp.run(5)
+    tp.run(5)
 
 

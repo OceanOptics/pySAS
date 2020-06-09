@@ -165,7 +165,7 @@ class IndexingTable:
             if isnan(pre_pos):  # Unable to read position
                 return False
             sleep(self.COMMAND_EXECUTION_TIME)
-            while pre_pos != self.get_position() or time() - start_time > self.MOTION_TIMEOUT:
+            while pre_pos != self.get_position() and time() - start_time < self.MOTION_TIMEOUT:
                 pre_pos = self.position
                 sleep(self.COMMAND_EXECUTION_TIME)
             if self.get_stall_flag():

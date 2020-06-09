@@ -603,7 +603,7 @@ class HyperOCR(Sensor):
             self._data_logger.timestamp_packer = pack_timestamp_satlantic
             # TODO _log_data add custom header matching files from HyperSAS
             self._data_logger.registration = b''
-            self._data_logger.terminator = b'\r\n'
+            self._data_logger.terminator = b''
         else:
             self._data_logger = data_logger
 

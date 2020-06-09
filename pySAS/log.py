@@ -121,7 +121,7 @@ def pack_timestamp(timestamp):
 def pack_timestamp_satlantic(timestamp):
     s, ms = divmod(timestamp, 1)
     return pack('!ii', int(strftime('%Y%j', gmtime(s))),
-                int('{}{:03d}'.format(strftime('%H%M%S', gmtime(s)), int(ms * 1000))))
+                int('{}{:03d}'.format(strftime('%H%M%S', gmtime(s)), int(ms * 1000))))[1:]
 
 
 class LogText(Log):

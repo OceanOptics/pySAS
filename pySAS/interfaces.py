@@ -575,6 +575,7 @@ class GPS(Sensor):
 
         # Write parsed data
         if self._log_data:
+            # TODO Optimize logging to only write when received both frames (prevent replicated data)
             if self._data_logger_lock.acquire(timeout=0.5):
                 try:
                     self._data_logger.write([self.datetime.strftime('%Y/%m/%d %H:%M:%S.%f'),

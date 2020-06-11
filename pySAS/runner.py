@@ -102,6 +102,11 @@ class Runner:
         flag_no_position = False
         flag_stalled = False
         first_iteration = True
+        # Reset sleep mode if need to restart instruments
+        if self.indexing_table.alive and self.hypersas.alive:
+            self.asleep = False
+        else:
+            self.asleep = True
         while self.alive:
             # Timer
             iteration_timestamp = time()
@@ -117,7 +122,7 @@ class Runner:
                     if not self.asleep:
                         if not self.start_sleep_timestamp:
                             self.start_sleep_timestamp = time()
-                        if time() - self.start_sleep_timestamp > self.ASLEEP_DELAY:
+                        if time() - self.start_sleep_timestamp > self.ASLEEP_DELAY or first_iteration:
                             self.__logger.info('fall asleep')
                             self.indexing_table.stop()
                             self.hypersas.stop()

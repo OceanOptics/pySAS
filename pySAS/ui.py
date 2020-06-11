@@ -497,7 +497,6 @@ def set_tower_zero(n_clicks, _):
               [State('tower_label', 'children'),
                State('tower_zero', 'n_clicks'), State('tower_zero_last_n_clicks', 'children')])
 def set_tower_orientation(orientation, _, _2, label_state, zero_n_clicks, zero_n_clicks_last):
-    # TODO Bug fix when tower restart the position display 0 but it can be incorrect
     trigger = dash.callback_context.triggered[0]['prop_id']
 
     if trigger == 'status_refresh_interval.n_intervals':

@@ -10,7 +10,7 @@ from time import time, gmtime, strftime
 from math import isnan
 import os
 from pySAS import __version__, CFG_FILENAME, ui_log_queue
-from pySAS.runner import Runner
+from pySAS.runner import Runner, get_true_north_heading
 
 
 STATUS_REFRESH_INTERVAL = 1000
@@ -166,7 +166,7 @@ app.layout = dbc.Container([dbc.Row([
     html.Nav([
         html.Div(controls_layout, className='sidebar-sticky')
     ], className='col-md-3 col-lg-2 d-none d-md-block bg-light sidebar'),
-    # html.Div(id='no_output_0', className='d-none'),
+    html.Div(id='no_output_0', className='d-none'),
     # html.Div(id='no_output_1', className='d-none'),
     # html.Div(id='no_output_2', className='d-none'),
     html.Div(id='operation_mode_last_value', className='d-none'),  # , children=runner.operation_mode),
@@ -479,15 +479,15 @@ def set_tower_stall_flag(n_clicks, _, state):
 
 
 @app.callback(Output('tower_orientation', 'value'),
-              [Input('tower_zero', 'n_clicks')])
-def set_tower_zero(n_clicks):
-    # TODO Update tower_orientation when operation_mode is auto
-    if n_clicks:
-        logger.debug('set_tower_zero')
+              [Input('tower_zero', 'n_clicks'), Input('operation_mode', 'value')])
+def set_tower_zero(n_clicks, _):
+    trigger = dash.callback_context.triggered[0]['prop_id']
+    if trigger == 'tower_zero.n_clicks' and n_clicks:
+        logger.debug('set_tower_zero: zeroed')
         runner.indexing_table.reset_position_zero()
         return 0
     else:
-        logger.debug('set_tower_zero: loading')
+        logger.debug('set_tower_zero: get tower orientation')
         return runner.indexing_table.position
 
 
@@ -648,18 +648,25 @@ def toggle_modal(n1, n2, is_open):
     [Input("halt", "n_clicks")])
 def halt(n_clicks):
     if n_clicks:
-        logger.info('halt')
-        runner.halt()
-        # Stop dash environment (will stop the application
-        func = request.environ.get('werkzeug.server.shutdown')
-        if func is None:
-            raise RuntimeError('Not running with the Werkzeug Server')
-        func()
         return "Shutting down the system. Please wait 30 seconds before unplugging power.", \
                [dbc.Spinner(size='sm'), " Shutting Down... "], 'd-none'
     else:
         raise dash.exceptions.PreventUpdate()
 
+
+@app.callback(Output("no_output_0", "children"), [Input("halt_modal_body", "children")])
+def stop_pysas_and_halt_system(body):
+    if body[:13] == 'Shutting down':
+        logger.info('halt')
+        # Stop dash environment
+        #   Will stop the application and call atexit in inverse order of registration
+        #   Runner atexit should call runner.stop() last in which shutdown host
+        #   is called if option is specified in configuration file
+        func = request.environ.get('werkzeug.server.shutdown')
+        if func is None:
+            raise RuntimeError('Not running with the Werkzeug Server')
+        func()
+    raise dash.exceptions.PreventUpdate()
 
 ###########
 # Figures
@@ -690,6 +697,18 @@ def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse
     else:
         blind_zone_width = auto_pilot_limits[0] - auto_pilot_limits[1]
     blind_zone_center = auto_pilot_limits[1] + blind_zone_width / 2
+    # Update telemetry in special cases
+    if runner.operation_mode == 'manual' and timestamp - runner.sun_position_timestamp > runner.refresh_delay:
+        # Get Sun elevation
+        runner.get_sun_position()
+    if runner.operation_mode == 'manual' or (runner.asleep and runner.operation_mode == 'auto'):
+        # Get HyperSAS THS Compass adjusted
+        if runner.heading_source != 'ths_heading' and runner.hypersas.alive:
+            runner.hypersas.compass_adj = get_true_north_heading(runner.hypersas.compass,
+                                                                 runner.gps.latitude, runner.gps.longitude,
+                                                                 runner.gps.datetime, runner.gps.altitude)
+        # Get Heading
+        runner.get_ship_heading()
     # Get ship heading
     ship = float('nan')
     if timestamp - runner.ship_heading_timestamp < runner.DATA_EXPIRED_DELAY:
@@ -698,11 +717,11 @@ def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse
         tower = ship + tower
         # Adjust blind zone to ship referencial
         blind_zone_center = ship + blind_zone_center
-    # Get sun  (need GPS for time and location)
+    # Get sun
     sun = float('nan')
-    if timestamp - runner.sun_position_timestamp < runner.DATA_EXPIRED_DELAY:
+    if timestamp - runner.sun_position_timestamp < runner.DATA_EXPIRED_DELAY and runner.sun_elevation > 0:
         sun = runner.sun_azimuth
-    # Get HyperSAS Heading  (need GPS for magnetic correction)
+    # Get HyperSAS Heading
     ths = float('nan')
     if timestamp - runner.hypersas.packet_THS_parsed < runner.DATA_EXPIRED_DELAY:
         ths = runner.hypersas.compass_adj

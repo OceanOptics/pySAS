@@ -21,7 +21,7 @@ class Runner:
     DATA_EXPIRED_DELAY = 20     # seconds
     ASLEEP_DELAY = 120     # seconds
     ASLEEP_INTERRUPT = 120  # seconds
-    HEADING_TOLERANCE = 1  # degrees
+    HEADING_TOLERANCE = 0.2  # degrees ~ 111 motor steps
 
     def __init__(self, cfg_filename=None):
         # Setup Logging
@@ -48,12 +48,16 @@ class Runner:
         self.min_sun_elevation = self.cfg.getfloat(self.__class__.__name__, 'min_sun_elevation', fallback=20)
         self.start_sleep_timestamp = None
         self.stop_sleep_timestamp = None
-        self.asleep = False
+        self.asleep = True
         self.sun_elevation = float('nan')
         self.sun_azimuth = float('nan')
         self.sun_position_timestamp = float('nan')
         self.ship_heading = float('nan')
         self.ship_heading_timestamp = float('nan')
+
+        # Register methods to execute at exit as cannot use __del__ as logging is already off-loaded
+        # Register before interfaces to make sure it's called last in case use shutdown
+        atexit.register(self.stop)
 
         # Controllers & Sensors
         self.indexing_table = IndexingTable(self.cfg)
@@ -65,15 +69,11 @@ class Runner:
 
         # Pilot
         self.pilot = AutoPilot(self.cfg)
-        self.filter = None
 
         # Thread
         self.alive = False
         self._thread = None
         self.refresh_delay = self.cfg.getint(self.__class__.__name__, 'refresh', fallback=5)
-
-        # Register methods to execute at exit as cannot use __del__ as logging is already off-loaded
-        atexit.register(self.stop)
 
         # Start if in auto_mode
         if self.operation_mode == 'auto':
@@ -81,7 +81,7 @@ class Runner:
 
     def start_auto(self):
         if not self.alive:
-            self.__logger.debug('start')
+            self.__logger.debug('start auto')
             self.gps.start()  # GPS is continuously running, could optimize to turn off at night and turn on every hour
             self.alive = True
             self._thread = Thread(name=self.__class__.__name__, target=self.run_auto)
@@ -90,7 +90,7 @@ class Runner:
 
     def stop_auto(self):
         if self.alive:
-            self.__logger.debug('stop')
+            self.__logger.debug('stop auto')
             self.alive = False
             self._thread.join(2)
             if self._thread.is_alive():
@@ -98,11 +98,6 @@ class Runner:
             # self.gps.stop()
 
     def run_auto(self):
-        flag_no_gps_fix = False
-        flag_invalid_datetime = False
-        flag_invalid_heading = False
-        flag_pvt_expired = False
-        flag_relposned_expired = False
         flag_no_position = False
         flag_stalled = False
         first_iteration = True
@@ -111,63 +106,17 @@ class Runner:
             iteration_timestamp = time()
 
             try:
-                # Check GPS
-                if not self.gps.fix_ok:
-                    if not flag_no_gps_fix:
-                        self.__logger.info('No GPS fix, fix_type = ' + str(self.gps.fix_type))
-                        flag_no_gps_fix = True
-                    self._wait(iteration_timestamp)
-                    continue
-                if not self.gps.datetime_valid:
-                    if not flag_invalid_datetime:
-                        self.__logger.info('Invalid date and/or time')
-                        flag_invalid_datetime = True
-                    self._wait(iteration_timestamp)
-                    continue
-                if not self.gps.heading_valid:
-                    if not flag_invalid_heading:
-                        self.__logger.info('Invalid heading')
-                        flag_invalid_heading = True
-                    self._wait(iteration_timestamp)
-                    continue
-                if time() - self.gps.packet_pvt_received > self.DATA_EXPIRED_DELAY or\
-                        isnan(self.gps.packet_pvt_received):
-                    if not flag_pvt_expired:
-                        self.__logger.info('gps packet PVT expired')
-                        flag_pvt_expired = True
-                    self._wait(iteration_timestamp)
-                    continue
-                if time() - self.gps.packet_relposned_received > self.DATA_EXPIRED_DELAY or\
-                        isnan(self.gps.packet_relposned_received):
-                    if not flag_relposned_expired:
-                        self.__logger.info('gps packet RELPOSNED expired')
-                        flag_relposned_expired = True
-                    self._wait(iteration_timestamp)
-                    continue
-
-                # Reset GPS flags
-                if flag_no_gps_fix:
-                    flag_no_gps_fix = False
-                if flag_invalid_datetime:
-                    flag_invalid_datetime = False
-                if flag_invalid_heading:
-                    flag_invalid_heading = False
-                if flag_pvt_expired:
-                    flag_pvt_expired = False
-                if flag_relposned_expired:
-                    flag_relposned_expired = False
-
                 # Get Sun Position
-                self.sun_elevation, self.sun_azimuth = get_sun_position(self.gps.latitude, self.gps.longitude,
-                                                                        self.gps.datetime, self.gps.altitude)
-                self.sun_position_timestamp = time()
+                if not self.get_sun_position():
+                    self._wait(iteration_timestamp)
+                    continue
 
                 # Toggle Sleep Mode
                 if self.sun_elevation < self.min_sun_elevation:
                     if not self.asleep:
                         if not self.start_sleep_timestamp:
                             self.start_sleep_timestamp = time()
-                        if time() - self.start_sleep_timestamp > self.ASLEEP_DELAY or first_iteration:
+                        if time() - self.start_sleep_timestamp > self.ASLEEP_DELAY:
                             self.__logger.info('fall asleep')
                             self.indexing_table.stop()
                             self.hypersas.stop()
@@ -175,7 +124,7 @@ class Runner:
                             self.asleep = True
                         self.stop_sleep_timestamp = None
                 else:
-                    if self.asleep:
+                    if self.asleep or first_iteration:
                         if not self.stop_sleep_timestamp:
                             self.stop_sleep_timestamp = time()
                         if time() - self.stop_sleep_timestamp > self.ASLEEP_DELAY or first_iteration:
@@ -189,18 +138,10 @@ class Runner:
                     sleep(self.ASLEEP_INTERRUPT)
                     continue
 
-                # Correct HyperSAS THS Compass
-                self.hypersas.compass_adj = get_true_north_heading(self.hypersas.compass,
-                                                                   self.gps.latitude, self.gps.longitude,
-                                                                   self.gps.datetime, self.gps.altitude)
-
                 # Get Heading
-                ship_heading_tmp = self.get_ship_heading()
-
-                # Smooth Heading (not yet implemented)
-                if self.filter:
-                    ship_heading_tmp = self.filter.update(ship_heading_tmp)
-                self.ship_heading = ship_heading_tmp
+                if not self.get_ship_heading():
+                    self._wait(iteration_timestamp)
+                    continue
 
                 if not isnan(self.sun_azimuth):
                     # Compute aimed indexing table orientation
@@ -246,26 +187,51 @@ class Runner:
             self.__logger.warning('cannot keep up with refresh rate, slowing down')
             sleep(1 + abs(self.refresh_delay))
 
+    def get_sun_position(self):
+        """
+        Compute sun position after checking that gps fix and datetime valid are ok
+        :return: True: if succeeded and False otherwise
+        """
+        if self.gps.fix_ok and self.gps.datetime_valid and\
+                time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
+            self.sun_elevation, self.sun_azimuth = get_sun_position(self.gps.latitude, self.gps.longitude,
+                                                                    self.gps.datetime, self.gps.altitude)
+            self.sun_position_timestamp = time()
+            return True
+        else:
+            return False
+
     def get_ship_heading(self):
         """
         Get heading of ship according to the source selected
-        :return: heading of ship from the requested source
+        :return: True if succeeded and False otherwise
         """
         if self.heading_source == 'gps_relative_position':
-            self.ship_heading_timestamp = self.gps.packet_relposned_received
-            return self.pilot.get_ship_heading(self.gps.heading)
+            if self.gps.heading_valid and time() - self.gps.packet_relposned_received < self.DATA_EXPIRED_DELAY:
+                self.ship_heading = self.pilot.get_ship_heading(self.gps.heading)
+                self.ship_heading_timestamp = self.gps.packet_relposned_received
+                return True
         elif self.heading_source == 'gps_motion':
-            self.ship_heading_timestamp = self.gps.packet_pvt_received
-            return self.pilot.get_ship_heading(self.gps.heading_motion)
+            if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
+                self.ship_heading = self.pilot.get_ship_heading(self.gps.heading_motion)
+                self.ship_heading_timestamp = self.gps.packet_pvt_received
+                return True
         elif self.heading_source == 'gps_vehicle':
-            self.ship_heading_timestamp = self.gps.packet_pvt_received
-            return self.pilot.get_ship_heading(self.gps.heading_vehicle)
+            if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
+                self.ship_heading = self.pilot.get_ship_heading(self.gps.heading_vehicle)
+                self.ship_heading_timestamp = self.gps.packet_pvt_received
+                return True
         elif self.heading_source == 'ths_heading':
-            # Take hypersas compass heading freshly corrected for magnetic declination
-            self.ship_heading_timestamp = self.hypersas.packet_THS_parsed
-            return self.pilot.get_ship_heading(self.hypersas.compass_adj, self.indexing_table.get_position())
+            if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
+                self.hypersas.compass_adj = get_true_north_heading(self.hypersas.compass,
+                                                                   self.gps.latitude, self.gps.longitude,
+                                                                   self.gps.datetime, self.gps.altitude)
+                self.ship_heading = self.pilot.get_ship_heading(self.hypersas.compass_adj, self.indexing_table.get_position())
+                self.ship_heading_timestamp = self.hypersas.packet_THS_parsed
+                return True
         else:
             raise ValueError('Invalid heading source')
+        return False
 
     def set_cfg_variable(self, section, variable, value):
         if self.cfg[section][variable] == str(value):
@@ -283,15 +249,10 @@ class Runner:
         with open(self._cfg_filename, 'w') as cfg_file:
             self.cfg.write(cfg_file)
 
-    def halt(self):
-        if self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=False):
-            run("sleep 5 && sudo shutdown -h now", shell=True)
-            # TODO Test on RPi
-            # TODO add 5 second before shutting down to make sure ui is still responsive
-            # TODO check if non blocking needed using Popen
-
     def stop(self):
-        self.__logger.debug('stop')
+        self.stop_auto()
+        if self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=False):
+            run(("shutdown", "-h", "now"))  # Must be authorized to run command
 
 
 # # Update leap_seconds_adjustments table from pysolar

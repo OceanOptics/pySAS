@@ -15,8 +15,8 @@ setuptools.setup(
     url="https://github.com/doizuc/pySAS/",
     packages=setuptools.find_packages(),
     install_requires=['dash>=1.9.1', 'dash-bootstrap-components', 'geomag', 'gpiozero',
-                      'numpy', 'pyserial>=3.4', 'pysolar==0.8', 'pytz', 'ubxtranslator'], # pySatlantic
-    python_requires='>=3.5',
+                      'numpy', 'pyserial>=3.4', 'pysolar==0.8', 'pytz', 'ubxtranslator', 'pySatlantic'],
+    python_requires='>=3.8',
     license='GNU AGPLv3',
     classifiers=[
         "Programming Language :: Python :: 3",

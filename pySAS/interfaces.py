@@ -328,6 +328,8 @@ class IndexingTable:
                     self.reset_stall_flag()
                 # Move indexing table back to 0
                 self.set_position(0, check_stall_flag=True)
+            # Close log
+            self._log_data.close()
             # Stop serial connection
             if hasattr(self._serial, 'cancel_read'):
                 self._serial.cancel_read()
@@ -335,8 +337,6 @@ class IndexingTable:
                 self._serial.close()
             # Stop Power
             self._relay.off()
-            # Close log
-            self._log_data.close()
             self.alive = False
 
 
@@ -521,10 +521,12 @@ class GPS(Sensor):
             except OSError as e:
                 self.__logger.error(e)
                 self.__logger.error('device disconnected or multiple access on port?')
-                self.stop(from_thread=True)
+                # self.stop(from_thread=True)
+                sleep(1)
             except ValueError as e:
                 self.__logger.error(e)
                 self.__logger.error('corrupted message')
+                sleep(1)
             except Exception as e:
                 self.__logger.error(e)
                 sleep(1)

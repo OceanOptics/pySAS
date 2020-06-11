@@ -6,7 +6,7 @@ from io import StringIO
 import os
 from geomag.geomag import GeoMag
 
-__version__ = '0.3.2'
+__version__ = '0.3.3'
 
 # Global Variables
 CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg.ini')

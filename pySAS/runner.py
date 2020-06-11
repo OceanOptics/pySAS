@@ -125,7 +125,7 @@ class Runner:
                             self.asleep = True
                         self.stop_sleep_timestamp = None
                 else:
-                    if self.asleep or first_iteration:
+                    if self.asleep:
                         if not self.stop_sleep_timestamp:
                             self.stop_sleep_timestamp = time()
                         if time() - self.stop_sleep_timestamp > self.ASLEEP_DELAY or first_iteration:
@@ -135,6 +135,8 @@ class Runner:
                             self.hypersas.start()
                             self.asleep = False
                     self.start_sleep_timestamp = None
+                if first_iteration:
+                    first_iteration = False
                 if self.asleep:
                     sleep(self.ASLEEP_INTERRUPT)
                     continue
@@ -166,8 +168,7 @@ class Runner:
                                 if flag_no_position:
                                     flag_no_position = False
 
-                if first_iteration:
-                    first_iteration = False
+
             except Exception as e:
                 self.__logger.critical(e)
 
@@ -276,7 +277,7 @@ def get_sun_position(lat, lon, dt_utc=None, elevation=0):
     #   azimuth max error: 0.176 degrees; altitude max error: 0.604 degrees
     # pySolar reference frame:
     #   altitude: 0 is horizon, positive is above the horizon
-    #   azimuth: 0 is south, positive correspond to east of south
+    #   azimuth: 0 is north, positive east, negative is west (or >180)
 
     if dt_utc is None:
         dt_utc = datetime.utcnow()
@@ -287,8 +288,7 @@ def get_sun_position(lat, lon, dt_utc=None, elevation=0):
 
     altitude = get_altitude(lat, lon, dt_utc, elevation)
     if altitude > 0:
-        # azimuth = get_azimuth(lat, lon, dt_utc, elevation) % 360  # bug here has assume North as zero
-        azimuth = (180 - get_azimuth(lat, lon, dt_utc, elevation)) % 360 # Translate back to North = 0, clockwise referential
+        azimuth = get_azimuth(lat, lon, dt_utc, elevation)
         return altitude, azimuth
     else:
         return altitude, float('nan')

@@ -495,21 +495,23 @@ class GPS(Sensor):
         # 5: time only
 
     def start_logging(self):
-        self.__logger.debug('start logging')
-        if not self.alive:
-            self.__logger.info('not alive')
-        self._log_data = True
+        if not self._log_data:
+            self.__logger.debug('start logging')
+            if not self.alive:
+                self.__logger.info('not alive')
+            self._log_data = True
 
     def stop_logging(self):
-        self.__logger.debug('stop logging')
-        self._log_data = False
-        if self._data_logger_lock.acquire(timeout=2):
-            try:
-                self._data_logger.close()
-            finally:
-                self._data_logger_lock.release()
-        else:
-            self.__logger.warning('Unable to acquire data_logger to close file')
+        if self._log_data:
+            self.__logger.debug('stop logging')
+            self._log_data = False
+            if self._data_logger_lock.acquire(timeout=2):
+                try:
+                    self._data_logger.close()
+                finally:
+                    self._data_logger_lock.release()
+            else:
+                self.__logger.warning('Unable to acquire data_logger to close file')
 
     def run(self):
         while self.alive:

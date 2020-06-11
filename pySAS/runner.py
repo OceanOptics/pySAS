@@ -54,6 +54,15 @@ class Runner:
         self.sun_position_timestamp = float('nan')
         self.ship_heading = float('nan')
         self.ship_heading_timestamp = float('nan')
+        self.interrupt_from_ui = False
+
+        # Pilot
+        self.pilot = AutoPilot(self.cfg)
+
+        # Thread
+        self.alive = False
+        self._thread = None
+        self.refresh_delay = self.cfg.getint(self.__class__.__name__, 'refresh', fallback=5)
 
         # Register methods to execute at exit as cannot use __del__ as logging is already off-loaded
         # Register before interfaces to make sure it's called last in case use shutdown
@@ -66,14 +75,6 @@ class Runner:
         self.es = None
         if 'Es' in self.cfg.sections():
             self.es = Es(self.cfg, data_logger=self.hypersas._data_logger, parser=self.hypersas._parser)
-
-        # Pilot
-        self.pilot = AutoPilot(self.cfg)
-
-        # Thread
-        self.alive = False
-        self._thread = None
-        self.refresh_delay = self.cfg.getint(self.__class__.__name__, 'refresh', fallback=5)
 
         # Start if in auto_mode
         if self.operation_mode == 'auto':
@@ -251,7 +252,7 @@ class Runner:
 
     def stop(self):
         self.stop_auto()
-        if self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=False):
+        if self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=False) and self.interrupt_from_ui:
             run(("shutdown", "-h", "now"))  # Must be authorized to run command
 
 

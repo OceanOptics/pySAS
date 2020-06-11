@@ -658,6 +658,7 @@ def halt(n_clicks):
 def stop_pysas_and_halt_system(body):
     if body[:13] == 'Shutting down':
         logger.info('halt')
+        runner.interrupt_from_ui = True
         # Stop dash environment
         #   Will stop the application and call atexit in inverse order of registration
         #   Runner atexit should call runner.stop() last in which shutdown host

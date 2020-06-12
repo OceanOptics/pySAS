@@ -91,9 +91,24 @@ body {
 
 /*
  * Dash Slider
-*/
+ */
 .wide-slider{
     margin: 0 -25px
+}
+
+/*
+ * Switch
+ */
+#_hypersas_switch-on{
+    display: none;
+}
+
+#_gps_switch-on{
+    display: none;
+}
+
+#_tower_switch-on{
+    display: none;
 }
 
 /*

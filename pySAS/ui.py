@@ -257,18 +257,16 @@ def set_operation_mode(operation_mode, tower_switch, operation_mode_previous, to
     elif trigger == 'tower_switch.value':
         if get_switch_n_updates != get_switch_last_n_updates:
             logger.debug('set_operation_mode: called by get_switch')
-            return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, \
-                   dash.no_update, dash.no_update, get_switch_n_updates
-        if tower_switch not in [["on"], []]:
+        elif tower_switch not in [["on"], []]:
             logger.warning('set_operation_mode: invalid tower switch ' + str(tower_switch))
             raise dash.exceptions.PreventUpdate()
-        if tower_switch == tower_switch_previous:
+        elif tower_switch == tower_switch_previous:
             logger.debug('set_operation_mode: tower_switch already up to date')
             raise dash.exceptions.PreventUpdate()
-        if runner.operation_mode != 'manual':
+        elif runner.operation_mode != 'manual':
             logger.debug('set_operation_mode: tower_switch modification unauthorized')
             raise dash.exceptions.PreventUpdate()
-        if tower_switch_previous is None:
+        elif tower_switch_previous is None:
             logger.debug('set_operation_mode: init tower_switch')
         else:
             if tower_switch:
@@ -295,9 +293,15 @@ def set_operation_mode(operation_mode, tower_switch, operation_mode_previous, to
         if not runner.indexing_table.alive:
             tower_orientation_class_name = 'd-none'
             tower_zero_class_name = 'd-none'
+    else:
+        logger.warning('set_operation_mode: unknown operation mode ' + str(runner.operation_mode))
+    if runner.indexing_table.alive:
+        tower_state = ['on']
+    else:
+        tower_state = []
     # Update UI
     return tower_switch_class_name, tower_orientation_class_name, tower_zero_class_name, gps_switch_class_name, \
-           hypersas_switch_class_name, hypersas_status_class_name, operation_mode, tower_switch, dash.no_update
+           hypersas_switch_class_name, hypersas_status_class_name, runner.operation_mode, tower_state, get_switch_n_updates
 
 
 @app.callback([Output('hypersas_switch', 'value'), Output('gps_switch', 'value'), Output('tower_switch', 'value'),

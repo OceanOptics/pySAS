@@ -6,10 +6,10 @@ from io import StringIO
 import os
 from geomag.geomag import GeoMag
 
-__version__ = '0.3.3'
+__version__ = '0.3.4'
 
 # Global Variables
-CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg_local.ini')
+CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg.ini')
 LOGGING_LEVEL = logging.DEBUG
 
 # Setup application logging

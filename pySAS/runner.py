@@ -12,14 +12,13 @@ from pySAS import WORLD_MAGNETIC_MODEL
 from datetime import datetime
 import pytz
 # from pysolar.time import leap_seconds_adjustments   # v0.7
-from pysolar.solartime import leap_seconds_adjustments # v0.8
+from pysolar.solartime import leap_seconds_adjustments  # v0.8
 from pysolar.solar import get_azimuth, get_altitude
 
 
 class Runner:
-
-    DATA_EXPIRED_DELAY = 20     # seconds
-    ASLEEP_DELAY = 120     # seconds
+    DATA_EXPIRED_DELAY = 20  # seconds
+    ASLEEP_DELAY = 120  # seconds
     ASLEEP_INTERRUPT = 120  # seconds
     HEADING_TOLERANCE = 0.2  # degrees ~ 111 motor steps
 
@@ -118,7 +117,7 @@ class Runner:
                     continue
 
                 # Toggle Sleep Mode
-                if self.sun_elevation < self.min_sun_elevation:
+                if self.sun_elevation < self.min_sun_elevation:  # TODO Implement sleep when no position or stalled
                     if not self.asleep:
                         if not self.start_sleep_timestamp:
                             self.start_sleep_timestamp = time()
@@ -199,7 +198,7 @@ class Runner:
         Compute sun position after checking that gps fix and datetime valid are ok
         :return: True: if succeeded and False otherwise
         """
-        if self.gps.fix_ok and self.gps.datetime_valid and\
+        if self.gps.fix_ok and self.gps.datetime_valid and \
                 time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
             self.sun_elevation, self.sun_azimuth = get_sun_position(self.gps.latitude, self.gps.longitude,
                                                                     self.gps.datetime, self.gps.altitude)
@@ -265,7 +264,7 @@ class Runner:
 # # Update leap_seconds_adjustments table from pysolar
 # pysolar_end_year = 2015  # v0.7
 pysolar_end_year = 2018  # v0.8
-for y in range(pysolar_end_year, datetime.now().year+2):
+for y in range(pysolar_end_year, datetime.now().year + 2):
     leap_seconds_adjustments.append((0, 0))  # Not exact but fine for our application
 
 
@@ -318,8 +317,7 @@ def get_true_north_heading(heading, latitude, longitude, datetime_utc=None, alti
     if datetime_utc.tzinfo is None or datetime_utc.tzinfo.utcoffset(datetime_utc) is None:
         datetime_utc = datetime_utc.replace(tzinfo=pytz.utc)
 
-    return (heading + WORLD_MAGNETIC_MODEL.GeoMag(latitude, longitude, altitude * 3.2808399, datetime_utc.date()).dec) \
-        % 360
+    return (heading + WORLD_MAGNETIC_MODEL.GeoMag(latitude, longitude, altitude * 3.2808399, datetime_utc.date()).dec) % 360
 
 
 def normalize_angle(angle):
@@ -354,6 +352,9 @@ class AutoPilot:
         self.set_tower_limits(cfg.get(self.__class__.__name__, 'valid_indexing_table_orientation_limits').replace('[', '').replace(']', '').split(','))
         self.target = cfg.getfloat(self.__class__.__name__, 'optimal_angle_away_from_sun', fallback=135)
 
+        self.min_dist_delta = cfg.getfloat(self.__class__.__name__, 'minimum_distance_delta', fallback=3)  # degrees
+        self.selected_option = None
+
     def set_tower_limits(self, limits):
         self.tower_limits = [normalize_angle(float(v)) for v in limits]
 
@@ -386,10 +387,12 @@ class AutoPilot:
 
         if not valid_options:
             # No option
+            self.selected_option = None
             return float('nan')
         elif valid_options < 3:
             # One option
-            return tower_orientation_options[valid_options - 1]
+            self.selected_option = valid_options - 1
+            return tower_orientation_options[self.selected_option]
         else:
             # Two option: find the furthest away from the tower limits
             # Get distance between tower limits and each aimed orientation option
@@ -397,7 +400,14 @@ class AutoPilot:
                                 abs(normalize_angle(self.tower_limits[1] - tower_orientation_options[0]))),
                             min(abs(normalize_angle(self.tower_limits[0] - tower_orientation_options[1])),
                                 abs(normalize_angle(self.tower_limits[1] - tower_orientation_options[1])))]
-            return tower_orientation_options[dist_options.index(max(dist_options))]
+            max_dist_option = dist_options.index(max(dist_options))
+            # Prevent switch between positions back and forth
+            # Only switch if the delta between the two options is greater than MIN_DIST_DELTA
+            if self.selected_option is None or \
+                    (max_dist_option != self.selected_option and
+                     self.min_dist_delta < abs(dist_options[0] - dist_options[1])):
+                self.selected_option = max_dist_option
+            return tower_orientation_options[self.selected_option]
 
     def get_ship_heading(self, compass_heading, tower_orientation_correction=None):
         if tower_orientation_correction is None:
@@ -406,4 +416,3 @@ class AutoPilot:
         else:
             # Assume compass is mounted on tower so need to take that into account
             return normalize_angle(compass_heading + tower_orientation_correction - self.tower_zero - self.compass_zero)
-

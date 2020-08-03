@@ -446,7 +446,7 @@ class GPS(Sensor):
                                  'variable_units': ['yyyy-mm-dd HH:MM:SS.us', 'us', 'bool',
                                                     'deg', 'deg', 'bool',
                                                     'deg', 'deg', 'deg', 'bool',
-                                                    'm/s ground', 'm/s'
+                                                    'm/s ground', 'm/s',
                                                     'deg N', 'deg E', 'm', 'm MSL', 'm',
                                                     'bool',
                                                     '0: no_fix; 1: DR; 2: 2D-fix; 3: 3D-fix; 4: GNSS+DR; 5: time_only',

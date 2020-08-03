@@ -8,7 +8,7 @@ cfg.add_section('AutoPilot')
 # cfg.set('AutoPilot', 'compass_mounted_on_indexing_table', 'False')
 cfg.set('AutoPilot', 'gps_orientation_on_ship', '0')
 cfg.set('AutoPilot', 'indexing_table_orientation_on_ship', '0')
-cfg.set('AutoPilot', 'valid_indexing_table_orientation_limits', '-180:180')
+cfg.set('AutoPilot', 'valid_indexing_table_orientation_limits', '[-180, 180]')
 cfg.set('AutoPilot', 'optimal_angle_away_from_sun', '135')
 
 class TestAutoPilot(unittest.TestCase):

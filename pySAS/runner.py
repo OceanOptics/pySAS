@@ -134,6 +134,8 @@ class Runner:
                             self.stop_sleep_timestamp = time()
                         if time() - self.stop_sleep_timestamp > self.ASLEEP_DELAY or first_iteration:
                             self.__logger.info('waking up')
+                            if not self.internet and not first_iteration:
+                                self.get_time_sync()
                             self.indexing_table.start()
                             self.gps.start_logging()
                             self.hypersas.start()

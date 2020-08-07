@@ -1,7 +1,9 @@
 import logging
 import configparser
-from time import gmtime, time, sleep
+from time import gmtime, time, sleep, strftime
 from math import isnan
+from datetime import timedelta
+import socket
 import atexit
 from subprocess import run
 from threading import Thread
@@ -54,6 +56,8 @@ class Runner:
         self.ship_heading = float('nan')
         self.ship_heading_timestamp = float('nan')
         self.interrupt_from_ui = False
+        self.time_synced = None
+        self.internet = check_internet()
 
         # Pilot
         self.pilot = AutoPilot(self.cfg)
@@ -111,6 +115,10 @@ class Runner:
             iteration_timestamp = time()
 
             try:
+                # Try to sync time
+                if not self.internet and self.time_synced is None:
+                    self.get_time_sync()
+
                 # Get Sun Position
                 if not self.get_sun_position():
                     self._wait(iteration_timestamp)
@@ -174,7 +182,6 @@ class Runner:
                                 if flag_no_position:
                                     flag_no_position = False
 
-
             except Exception as e:
                 self.__logger.critical(e)
 
@@ -194,6 +201,20 @@ class Runner:
         else:
             self.__logger.warning('cannot keep up with refresh rate, slowing down')
             sleep(1 + abs(self.refresh_delay))
+
+    def get_time_sync(self):
+        """
+        Sync system time to GPS, override used if time has already been synced
+        """
+        if self.gps.fix_ok and self.gps.datetime_valid and \
+                time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
+            pre_sync = time()
+            delta = timedelta(seconds=(pre_sync - self.gps.packet_pvt_received))
+            run(("date", "-s", str((self.gps.datetime+delta).isoformat())))
+            self.time_synced = time()
+            self.__logger.info("Time synced from %s to %s" % (strftime(pre_sync), strftime(self.time_synced)))
+        else:
+            pass
 
     def get_sun_position(self):
         """
@@ -329,6 +350,19 @@ def normalize_angle(angle):
     while new_angle > 180:
         new_angle -= 360
     return new_angle
+
+
+def check_internet(host="8.8.8.8", port=53, timeout=3):
+    """
+    Check internet connection by pinging google
+    :return: True if google ping successful, False if fails
+    """
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        return True
+    except socket.error as ex:
+        return False
 
 
 class AutoPilot:

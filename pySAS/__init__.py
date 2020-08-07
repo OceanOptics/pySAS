@@ -1,12 +1,12 @@
 import logging
 from logging.handlers import RotatingFileHandler  #, QueueHandler
-from time import strftime, gmtime
-# from queue import Queue
 from io import StringIO
 import os
+import sys
+import traceback
 from geomag.geomag import GeoMag
 
-__version__ = '0.3.5'
+__version__ = '0.3.6'
 
 # Global Variables
 CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg.ini')
@@ -20,11 +20,20 @@ if not os.path.isdir('logs'):
 logging.basicConfig(level=LOGGING_LEVEL)
 root_logger = logging.getLogger()   # Get root logger
 
+
+# Catch errors in log
+def except_hook(exc_type, exc_value, exc_tb):
+    tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    root_logger.error(tb)
+
+
+sys.excepthook = except_hook
+
 # Logging in file
 path_to_log = os.path.join(os.path.dirname(__file__), 'logs')
 if not os.path.isdir(path_to_log):
     os.mkdir(path_to_log)
-log_filename = os.path.join(path_to_log, 'pySAS_' + strftime('%Y%m%d_%H%M%S', gmtime()) + '.log')
+log_filename = os.path.join(path_to_log, 'pySAS.log')
 ch_file = RotatingFileHandler(log_filename, maxBytes=1048576 * 5, backupCount=9)
 formater_file = logging.Formatter("%(asctime)s %(levelname)-7.7s [%(name)s]  %(message)s")
 ch_file.setFormatter(formater_file)
@@ -42,7 +51,7 @@ root_logger.addHandler(ch_ui)
 # Set logging level of werkzeug as too verbose when starting production server
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
-# root_logger.debug('__init__')
-
 # Load NOAA World Magnetic Model
 WORLD_MAGNETIC_MODEL = GeoMag()
+
+root_logger.debug('pySAS v%s initialized' % __version__)

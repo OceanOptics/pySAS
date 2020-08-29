@@ -261,7 +261,7 @@ class Runner:
         return False
 
     def set_cfg_variable(self, section, variable, value):
-        if self.cfg[section][variable] == str(value):
+        if self.cfg.has_option(section, variable) and self.cfg[section][variable] == str(value):
             self.__logger.debug('set_cfg_variable(' + section + ', ' + variable + ', ' + str(value) + ') already up to date')
             return
         self.__logger.debug('set_cfg_variable(' + section + ', ' + variable + ', ' + str(value) + ')')

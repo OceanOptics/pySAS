@@ -12,7 +12,6 @@ import os
 from pySAS import __version__, CFG_FILENAME, ui_log_queue
 from pySAS.runner import Runner, get_true_north_heading
 
-
 STATUS_REFRESH_INTERVAL = 1000
 HYPERSAS_READING_INTERVAL = 2000
 
@@ -84,7 +83,7 @@ controls_layout = [
                                 style={'marginRight': '-0.5em', 'display': 'inline-block'},
                                 className="mt-1 ml-1")
                   ], width=9, className='text-right'),
-        ], row=True),
+         ], row=True),
     dcc.Slider(id='tower_orientation', min=-180, max=180, step=1, value=96, included=False, disabled=False,
                marks={i: '{}°'.format(i) for i in [-160, -80, 0, 80, 160]},
                tooltip={'always_visible': False, 'placement': 'bottom'},
@@ -104,6 +103,14 @@ controls_layout = [
                             tooltip={'always_visible': False, 'placement': 'bottom'}, included=False,
                             className='wide-slider')
         ], className='mb-4'),
+        # GPS Orientation
+        dbc.FormGroup([
+            dbc.Label("GPS Orientation"),
+            dbc.InputGroup([
+                dbc.Input(id='gps_orientation', type='number', min=-180, max=360, step=1, debounce=True),
+                dbc.InputGroupAddon("°", addon_type="append")
+            ], className="mb-3", size='sm'),
+        ]),
         # Sun Elevation
         dbc.FormGroup([
             dbc.Label("Sun Elevation"),
@@ -173,6 +180,7 @@ app.layout = dbc.Container([dbc.Row([
     dbc.Button(id='load_settings', className='d-none'),
     html.Div(id='tower_valid_orientation_init', className='d-none'),
     html.Div(id='tower_reverse_valid_orientation_init', className='d-none'),
+    html.Div(id='gps_orientation_init', className='d-none'),
     html.Div(id='min_sun_elevation_init', className='d-none'),
     html.Div(id='refresh_sun_elevation_init', className='d-none'),
     html.Div(id='hypersas_device_file_init', className='d-none'),
@@ -185,6 +193,7 @@ app.layout = dbc.Container([dbc.Row([
 # Init
 @app.callback([Output('operation_mode', 'value'),
                Output('tower_valid_orientation', 'value'), Output('tower_reverse_valid_orientation', 'checked'),
+               Output('gps_orientation', 'value'),
                Output('min_sun_elevation', 'value'), Output('refresh_sun_elevation', 'value'),
                Output('hypersas_device_file', 'value')],
               [Input('load_settings', 'n_clicks')])
@@ -195,10 +204,11 @@ def set_content_on_page_load(n_clicks):
             tower_reverse_valid_orientation = True
         logger.debug('set_content_on_page_load: ' +
                      str((runner.operation_mode, runner.pilot.tower_limits, tower_reverse_valid_orientation,
-                          runner.min_sun_elevation, runner.refresh_delay,
+                          runner.pilot.compass_zero, runner.min_sun_elevation, runner.refresh_delay,
                           runner.cfg.get('HyperSAS', 'sip', fallback='???'))))
         return runner.operation_mode, runner.pilot.tower_limits, tower_reverse_valid_orientation, \
-               runner.min_sun_elevation, runner.refresh_delay, runner.cfg.get('HyperSAS', 'sip', fallback='???')
+            runner.pilot.compass_zero, runner.min_sun_elevation, runner.refresh_delay, \
+            runner.cfg.get('HyperSAS', 'sip', fallback='???')
     raise dash.exceptions.PreventUpdate()
 
 
@@ -559,6 +569,23 @@ def set_tower_valid_orientation(limits, reverse, limits_init, reverse_init):
         return output_included, limits_init, reverse_init
 
 
+@app.callback(Output('gps_orientation_init', 'children'),
+              [Input('gps_orientation', 'value'), Input('gps_orientation', 'loading_state')],
+              [State('gps_orientation_init', 'children')])
+def set_gps_orientation(value, _, init):
+    trigger = dash.callback_context.triggered[0]['prop_id']
+    if trigger == 'gps_orientation.value':
+        if init is None:
+            logger.debug('set_gps_orientation: init min')
+            return True
+        logger.debug('set_gps_orientation: ' + str(value))
+        runner.pilot.compass_zero = value
+        runner.set_cfg_variable('AutoPilot', 'gps_orientation_on_ship', value)
+    elif trigger == 'gps_orientation.loading_state':
+        logger.debug('set_gps_orientation: loading')
+    raise dash.exceptions.PreventUpdate()
+
+
 @app.callback(Output('min_sun_elevation_init', 'children'),
               [Input('min_sun_elevation', 'value'), Input('min_sun_elevation', 'loading_state')],
               [State('min_sun_elevation_init', 'children')])
@@ -669,6 +696,7 @@ def stop_dash():
     if func is None:
         raise RuntimeError('Not running with the Werkzeug Server')
     func()
+
 
 ###########
 # Figures

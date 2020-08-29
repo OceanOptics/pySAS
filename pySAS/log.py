@@ -104,14 +104,11 @@ class LogBinary(Log):
         super().__init__(*args, **kwargs)
         self.variable_names = []
         self.variable_units = []
-        self.registration = b'\xff\x00\xff\x00'
-        self.terminator = b''
         self.timestamp_packer = pack_timestamp
 
     def write(self, data, timestamp):
         self._smart_open(timestamp)
-        self._file.write(self.registration + data + self.terminator + self.timestamp_packer(timestamp))
-        # TODO Test unpacking (especially for ACS and HyperSAS)
+        self._file.write(data + self.timestamp_packer(timestamp))
 
 
 def pack_timestamp(timestamp):

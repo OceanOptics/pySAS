@@ -1,12 +1,13 @@
 import logging
-from logging.handlers import RotatingFileHandler  #, QueueHandler
-from io import StringIO
+from logging.handlers import RotatingFileHandler, QueueHandler
+from queue import Queue
+# from io import StringIO
 import os
 import sys
 import traceback
 from geomag.geomag import GeoMag
 
-__version__ = '0.3.6'
+__version__ = '0.3.7'
 
 # Global Variables
 CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg.ini')
@@ -40,9 +41,10 @@ ch_file.setFormatter(formater_file)
 root_logger.addHandler(ch_file)
 
 # Add Logger Handler for User Interface
-# ui_log_queue = Queue(100)  # Use Queue
-ui_log_queue = StringIO()
-ch_ui = logging.StreamHandler(ui_log_queue)
+ui_log_queue = Queue(100)  # Use Queue
+ch_ui = QueueHandler(ui_log_queue)
+# ui_log_queue = StringIO()
+# ch_ui = logging.StreamHandler(ui_log_queue)
 formater_ui = logging.Formatter("%(asctime)s %(name)s: %(message)s\r\n")
 ch_ui.setFormatter(formater_ui)
 ch_ui.setLevel(logging.CRITICAL)

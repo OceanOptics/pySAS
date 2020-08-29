@@ -115,7 +115,7 @@ class IndexingTable:
             try:
                 self._serial.open()
             except SerialException as e:
-                self.__logger.error(e)
+                self.__logger.critical(e)
                 self._relay.off()
                 return False
             self.set_configuration()
@@ -607,8 +607,6 @@ class HyperOCR(Sensor):
                                            'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
             self._data_logger.timestamp_packer = pack_timestamp_satlantic
             # TODO _log_data add custom header matching files from HyperSAS
-            self._data_logger.registration = b''
-            self._data_logger.terminator = b''
         else:
             self._data_logger = data_logger
 

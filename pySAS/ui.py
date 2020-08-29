@@ -39,9 +39,6 @@ else:
 
 # Graph options
 graph_config = {'displaylogo': False, 'editable': False, 'displayModeBar': False, 'showTips': False}
-                # 'modeBarButtonsToRemove': ["toImage", "sendDataToCloud",
-                #                            "select2d", "lasso2d", "zoomIn2d", "zoomOut2d", "autoScale2d",
-                #                            "hoverClosestCartesian", "hoverCompareCartesian"]}
 
 controls_layout = [
     dcc.Location(id='location', refresh=True),
@@ -49,19 +46,17 @@ controls_layout = [
     html.P(['pySAS v' + __version__], style={'fontSize': '1.8vw', 'marginBottom': '0.3em'}, className='text-left'),
     html.H4([html.Span("17:34:04", id='time'), " UTC"],
             style={'fontFamily': 'Menlo', 'fontSize': '1.8vw', 'marginBottom': '0em'}, className='text-center'),
-    # html.H4('UTC', style={'fontSize':'2.17vw', 'marginBottom':'0em'}, className='text-right'),
     html.P('Nov 26, 2019', id='date', style={'fontFamily': 'Menlo', 'fontSize': '1.8vw'}, className='text-center'),
 
     # Status + Controls
     dbc.FormGroup([dbc.Label("Mode", html_for="operation_mode", width=4),
-                   dbc.Col(dbc.Select(id="operation_mode", bs_size='sm',  # value=runner.operation_mode,
+                   dbc.Col(dbc.Select(id="operation_mode", bs_size='sm',
                                       options=[{'label': "Manual", 'value': 'manual'},
                                                {'label': "Auto", 'value': 'auto'}]),
                            width=8),
                    ], row=True),
     dbc.FormGroup([dbc.Label(core_instruments_names, html_for="hypersas_activate", width=4, className='text-nowrap'),
                    dbc.Col([dbc.Checklist(id="hypersas_switch", switch=True, inline=False,
-                                          # value=['on'] if runner.hypersas.alive else [],
                                           options=[{'label': "", 'value': 'on'}],
                                           style={'marginRight': '-0.5em'},
                                           className='mt-1 ml-1'),
@@ -75,7 +70,6 @@ controls_layout = [
                             dbc.Badge("???", id='gps_flag_hdg', pill=True, color="light", className="mt-2 ml-1"),
                             dbc.Badge("No Time", id='gps_flag_time', pill=True, color="danger", className="mt-2 ml-1"),
                             dbc.Checklist(id="gps_switch", switch=True, inline=False,
-                                          # value=['on'] if runner.gps.alive else [],
                                           options=[{'label': "", 'value': 'on'}],
                                           style={'marginRight': '-0.5em', 'display': 'inline-block'},
                                           className='mt-1 ml-1'),
@@ -86,7 +80,6 @@ controls_layout = [
          dbc.Col([dbc.Badge("Stall", id='tower_stall_flag', pill=True, href="#", color="danger", className="mt-2 ml-1"),
                   dbc.Badge("Zero", id='tower_zero', pill=True, href="#", color="secondary", className="mt-2 ml-1"),
                   dbc.Checklist(id="tower_switch", switch=True, inline=False,
-                                # value=['on'] if runner.indexing_table.alive else [],
                                 options=[{'label': "", 'value': 'on'}],
                                 style={'marginRight': '-0.5em', 'display': 'inline-block'},
                                 className="mt-1 ml-1")
@@ -116,13 +109,12 @@ controls_layout = [
             dbc.Label("Sun Elevation"),
             dbc.InputGroup([
                 dbc.InputGroupAddon("Min", addon_type="prepend"),
-                dbc.Input(id='min_sun_elevation', type='number', min=0, max=90, step=1, debounce=True),  # , value=20),
+                dbc.Input(id='min_sun_elevation', type='number', min=0, max=90, step=1, debounce=True),
                 dbc.InputGroupAddon("°", addon_type="append")
             ], className="mb-3", size='sm'),
             dbc.InputGroup([
                 dbc.InputGroupAddon("Refresh", addon_type="prepend"),
                 dbc.Input(id='refresh_sun_elevation', type='number', min=0, max=90, step=1, debounce=True),
-                # , value=10),
                 dbc.InputGroupAddon("s", addon_type="append")
             ], className="mb-3", size='sm')
         ]),
@@ -134,19 +126,20 @@ controls_layout = [
         # HyperSAS Device File
         dbc.FormGroup([dbc.Label("HyperSAS Device File", html_for="device_file"),
                        dbc.Input(id="hypersas_device_file", type='text', bs_size='sm', debounce=True)]),
-        # value=runner.cfg.get('HyperSAS', 'sip', fallback="I need a device file")),
         dbc.Button("Halt", id="trigger_halt_modal", outline=True, color="secondary", size='sm', block=True,
                    className="mt-4 mb-2")
     ], className='sidebar-settings w-100'),
 
     # Modals
     dbc.Modal([dbc.ModalBody("Are you sure you want to shut down pySAS now ?", id='halt_modal_body'),
-               dbc.ModalFooter([dbc.Button("Cancel", id="close_halt_modal", className="mr-1"),
-                                dbc.Button("Shut Down", id="halt", outline=True)]),
+               dbc.ModalFooter([dbc.Button("Cancel", id="halt_modal_close", className="mr-1"),
+                                dbc.Button("Shut Down", id="halt_modal_halt", outline=True)]),
                ],
               id="halt_modal", is_open=False, backdrop='static', keyboard=False, centered=True),
     dbc.Modal([dbc.ModalHeader("Error"),
-               dbc.ModalBody("Unknown error", id='error_modal_body')],
+               dbc.ModalBody("Unknown error", id='error_modal_body'),
+               dbc.ModalFooter([dbc.Button("Ignore", id="error_modal_close", className="mr-1"),
+                                dbc.Button("Reboot", id="error_modal_reboot", outline=True)])],
               id="error_modal", is_open=False, backdrop='static', keyboard=False, centered=True)
 ]
 
@@ -167,7 +160,7 @@ app.layout = dbc.Container([dbc.Row([
         html.Div(controls_layout, className='sidebar-sticky')
     ], className='col-md-3 col-lg-2 d-none d-md-block bg-light sidebar'),
     html.Div(id='no_output_0', className='d-none'),
-    # html.Div(id='no_output_1', className='d-none'),
+    html.Div(id='no_output_1', className='d-none'),
     # html.Div(id='no_output_2', className='d-none'),
     html.Div(id='operation_mode_last_value', className='d-none'),  # , children=runner.operation_mode),
     html.Div(id='tower_switch_last_value', className='d-none'),
@@ -637,18 +630,18 @@ def set_hypersas_device_file(device_file, _, init):
 ##########
 # Halt
 @app.callback(Output("halt_modal", "is_open"),
-              [Input("trigger_halt_modal", "n_clicks"), Input("close_halt_modal", "n_clicks")],
+              [Input("trigger_halt_modal", "n_clicks"), Input("halt_modal_close", "n_clicks")],
               [State("halt_modal", "is_open")])
-def toggle_modal(n1, n2, is_open):
+def toggle_halt_modal(n1, n2, is_open):
     # TODO Fix React warning
     if n1 or n2:
         return not is_open
     return is_open
 
 
-@app.callback(
-    [Output("halt_modal_body", "children"), Output("halt", "children"), Output("close_halt_modal", "className")],
-    [Input("halt", "n_clicks")])
+@app.callback([Output("halt_modal_body", "children"),
+               Output("halt_modal_halt", "children"), Output("halt_modal_close", "className")],
+              [Input("halt_modal_halt", "n_clicks")])
 def halt(n_clicks):
     if n_clicks:
         return "Shutting down the system. Please wait 30 seconds before unplugging power.", \
@@ -662,15 +655,20 @@ def stop_pysas_and_halt_system(body):
     if body[:13] == 'Shutting down':
         logger.info('halt')
         runner.interrupt_from_ui = True
-        # Stop dash environment
-        #   Will stop the application and call atexit in inverse order of registration
-        #   Runner atexit should call runner.stop() last in which shutdown host
-        #   is called if option is specified in configuration file
-        func = request.environ.get('werkzeug.server.shutdown')
-        if func is None:
-            raise RuntimeError('Not running with the Werkzeug Server')
-        func()
-    raise dash.exceptions.PreventUpdate()
+        stop_dash()
+    else:
+        raise dash.exceptions.PreventUpdate()
+
+
+def stop_dash():
+    # Stop dash environment
+    #   Will stop the application and call atexit in inverse order of registration
+    #   Runner atexit should call runner.stop() last in which shutdown host
+    #   is called if option is specified in configuration file
+    func = request.environ.get('werkzeug.server.shutdown')
+    if func is None:
+        raise RuntimeError('Not running with the Werkzeug Server')
+    func()
 
 ###########
 # Figures
@@ -843,28 +841,46 @@ def update_figure_spectrum(_):
 
 ##########
 # Errors
-@app.callback([Output("error_modal_body", "children"), Output("error_modal", "is_open")],
-              [Input('status_refresh_interval', 'n_intervals')])
-def update_error_modal(_):
-    buffer = ui_log_queue.getvalue()
-    if buffer:
-        return buffer, True
+@app.callback([Output("error_modal", "is_open"), Output("error_modal_body", "children"),
+               Output("error_modal_reboot", "children"), Output("error_modal_close", "className")],
+              [Input("error_modal_reboot", "n_clicks"), Input("error_modal_close", "n_clicks"),
+               Input('status_refresh_interval', 'n_intervals')])
+def update_error_modal(n1, n2, _):
+    trigger = dash.callback_context.triggered[0]['prop_id']
+    if trigger == 'status_refresh_interval.n_intervals':
+        # Buffer use Queue
+        if ui_log_queue.empty():
+            raise dash.exceptions.PreventUpdate()
+        msg = []
+        while not ui_log_queue.empty():
+            msg.append(html.P(ui_log_queue.get_nowait().message))
+        return True, msg, 'Reboot', 'mr-1'
+        # buffer use StreamIO
+        # buffer = ui_log_queue.getvalue()
+        # if buffer:
+        #     ui_log_queue.truncate(0)
+        #     ui_log_queue.seek(0)
+        #     return buffer, True
+        # else:
+        #     return "", False
+    elif trigger == 'error_modal_reboot.n_clicks':
+        if n1:
+            return True, "Rebooting the system. Please wait two minutes to reload page.", \
+                   [dbc.Spinner(size='sm'), " Rebooting... "], 'd-none'
+        raise dash.exceptions.PreventUpdate()
+    elif trigger == 'error_modal_close.n_clicks':
+        if n2:
+            return False, "", "Reboot", 'mr-1'
+        raise dash.exceptions.PreventUpdate()
     else:
-        return "", False
-    # msg = ""
-    # if not runner.cfg_last_update:
-    #     msg += "\n Unable to read configuration file."
-    # if msg:
-    #     return msg, True
-    # else:
-    #     return msg, False
+        logger.debug('unexpected case')
+        raise dash.exceptions.PreventUpdate()
 
-# TODO Add Warning Modal by using filter in logging
-# class MyFilter(object):
-#     def __init__(self, level):
-#         self.__level = level
-#
-#     def filter(self, logRecord):
-#         return logRecord.levelno <= self.__level
-# if __name__ == "__main__":
-#     app.run_server(debug=True)
+
+@app.callback(Output("no_output_1", "children"), [Input("error_modal_reboot", "children")])
+def reboot(button_value):
+    if button_value[1] == ' Rebooting... ':
+        logger.info('reboot')
+        runner.reboot_from_ui = True
+        stop_dash()
+    raise dash.exceptions.PreventUpdate()

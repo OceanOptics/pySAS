@@ -56,6 +56,7 @@ class Runner:
         self.ship_heading = float('nan')
         self.ship_heading_timestamp = float('nan')
         self.interrupt_from_ui = False
+        self.reboot_from_ui = False
         self.time_synced = None
         self.internet = check_internet()
 
@@ -115,10 +116,6 @@ class Runner:
             iteration_timestamp = time()
 
             try:
-                # Try to sync time
-                if not self.internet and self.time_synced is None:
-                    self.get_time_sync()
-
                 # Get Sun Position
                 if not self.get_sun_position():
                     self._wait(iteration_timestamp)
@@ -142,7 +139,7 @@ class Runner:
                             self.stop_sleep_timestamp = time()
                         if time() - self.stop_sleep_timestamp > self.ASLEEP_DELAY or first_iteration:
                             self.__logger.info('waking up')
-                            if not self.internet and not first_iteration:
+                            if not self.internet and not self.hypersas.alive:
                                 self.get_time_sync()
                             self.indexing_table.start()
                             self.gps.start_logging()
@@ -212,9 +209,10 @@ class Runner:
             delta = timedelta(seconds=(pre_sync - self.gps.packet_pvt_received))
             run(("date", "-s", str((self.gps.datetime+delta).isoformat())))
             self.time_synced = time()
-            self.__logger.info("Time synced from %s to %s" % (strftime(pre_sync), strftime(self.time_synced)))
+            self.__logger.info("Time synchronized. From %s to %s" % (strftime('%Y/%m/%d %H:%M:%S', gmtime(pre_sync)),
+                               strftime('%Y/%m/%d %H:%M:%S', gmtime(self.time_synced))))
         else:
-            pass
+            self.__logger.warning("Unable to synchronize time.")
 
     def get_sun_position(self):
         """
@@ -280,7 +278,9 @@ class Runner:
 
     def stop(self):
         self.stop_auto()
-        if self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=False) and self.interrupt_from_ui:
+        if self.reboot_from_ui and self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=True):
+            run(("shutdown", "-r", "now"))
+        if self.interrupt_from_ui and self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=False):
             run(("shutdown", "-h", "now"))  # Must be authorized to run command
 
 
@@ -381,7 +381,6 @@ class AutoPilot:
 
     """
     def __init__(self, cfg):
-        # self.compass_on_tower = cfg.getboolean(self.__class__.__name__, 'compass_mounted_on_indexing_table', fallback=False)
         self.compass_zero = normalize_angle(cfg.getfloat(self.__class__.__name__, 'gps_orientation_on_ship', fallback=0))
         self.tower_zero = normalize_angle(cfg.getfloat(self.__class__.__name__, 'indexing_table_orientation_on_ship', fallback=0))
         self.tower_limits = [float('nan'), float('nan')]

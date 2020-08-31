@@ -699,8 +699,8 @@ class HyperOCR(Sensor):
         if self.alive:
             was_alive = True
             self.stop()
-        self._parser_device_file = device_file
         self._parser = SatlanticParser(device_file, self.__immersed)
+        self._parser_device_file = device_file
         if was_alive:
             self.start()
 

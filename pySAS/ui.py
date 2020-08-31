@@ -9,6 +9,8 @@ import logging
 from time import time, gmtime, strftime
 from math import isnan
 import os
+import base64
+from zipfile import BadZipFile
 from pySAS import __version__, CFG_FILENAME, ui_log_queue
 from pySAS.runner import Runner, get_true_north_heading
 
@@ -131,13 +133,32 @@ controls_layout = [
         #                           options=[{'label': "None", 'value': 'none'}, {'label': "Kalman", 'value': 'kalman'}]),
         #                ]),
         # HyperSAS Device File
-        dbc.FormGroup([dbc.Label("HyperSAS Device File", html_for="device_file"),
-                       dbc.Input(id="hypersas_device_file", type='text', bs_size='sm', debounce=True)]),
+        dbc.FormGroup([dbc.Label("HyperSAS Device File", html_for="trigger_device_file_modal"),
+                       dbc.Button("Select or Upload", id="trigger_device_file_modal", outline=True, color='dark', size='sm')]),
         dbc.Button("Halt", id="trigger_halt_modal", outline=True, color="secondary", size='sm', block=True,
                    className="mt-4 mb-2")
     ], className='sidebar-settings w-100'),
 
     # Modals
+    dbc.Modal([dbc.ModalHeader(core_instruments_names + " Device File"),
+               dbc.ModalBody(dbc.Row([
+                   dbc.Col([
+                   dbc.Alert("Success! Device file imported.", id='device_file_modal_alert_success', color='success',
+                             is_open=False, duration=4000),
+                   dbc.Alert("Unable to import device file.", id='device_file_modal_alert_fail', color='danger',
+                             is_open=False, duration=10000),
+                   dbc.Alert("Unable to load device file.", id='device_file_modal_alert_fail_sel', color='danger',
+                             is_open=False, duration=10000)], md=12),
+                   dbc.Col(html.Div([
+                           dbc.FormGroup([dbc.Label('Select device file:', html_for='select_device_file'),
+                           dbc.RadioItems(id='select_device_file', options=[], labelCheckedStyle={"color": "green"})])]), md=6),
+                   dbc.Col(dcc.Upload(id='upload_device_file', children=html.Div(['Drag and Drop or ',
+                                                                        html.A('Select Device Files', style={'color': '#007bff'})]),
+                                      style={'padding': '40px 40px', 'borderWidth': '1px', 'borderStyle': 'dashed',
+                                             'borderRadius': '5px', 'textAlign': 'center', 'margin': '5px'}), md=6)])),
+               dbc.ModalFooter([dbc.Button("Close", id="device_file_modal_close", className="mr-1")]),
+               ],
+              id="device_file_modal", is_open=False, backdrop='static', keyboard=False, centered=True),
     dbc.Modal([dbc.ModalBody("Are you sure you want to shut down pySAS now ?", id='halt_modal_body'),
                dbc.ModalFooter([dbc.Button("Cancel", id="halt_modal_close", className="mr-1"),
                                 dbc.Button("Shut Down", id="halt_modal_halt", outline=True)]),
@@ -183,7 +204,7 @@ app.layout = dbc.Container([dbc.Row([
     html.Div(id='gps_orientation_init', className='d-none'),
     html.Div(id='min_sun_elevation_init', className='d-none'),
     html.Div(id='refresh_sun_elevation_init', className='d-none'),
-    html.Div(id='hypersas_device_file_init', className='d-none'),
+    html.Div(id='device_file_modal_update_options', className='d-None'),
     dcc.Interval(id='status_refresh_interval', interval=STATUS_REFRESH_INTERVAL),
     dcc.Interval(id='hypersas_reading_interval', interval=HYPERSAS_READING_INTERVAL)
 ], className='h-100')], fluid=True)
@@ -194,8 +215,7 @@ app.layout = dbc.Container([dbc.Row([
 @app.callback([Output('operation_mode', 'value'),
                Output('tower_valid_orientation', 'value'), Output('tower_reverse_valid_orientation', 'checked'),
                Output('gps_orientation', 'value'),
-               Output('min_sun_elevation', 'value'), Output('refresh_sun_elevation', 'value'),
-               Output('hypersas_device_file', 'value')],
+               Output('min_sun_elevation', 'value'), Output('refresh_sun_elevation', 'value')],
               [Input('load_settings', 'n_clicks')])
 def set_content_on_page_load(n_clicks):
     if n_clicks is None:
@@ -204,11 +224,9 @@ def set_content_on_page_load(n_clicks):
             tower_reverse_valid_orientation = True
         logger.debug('set_content_on_page_load: ' +
                      str((runner.operation_mode, runner.pilot.tower_limits, tower_reverse_valid_orientation,
-                          runner.pilot.compass_zero, runner.min_sun_elevation, runner.refresh_delay,
-                          runner.cfg.get('HyperSAS', 'sip', fallback='???'))))
+                          runner.pilot.compass_zero, runner.min_sun_elevation, runner.refresh_delay)))
         return runner.operation_mode, runner.pilot.tower_limits, tower_reverse_valid_orientation, \
-            runner.pilot.compass_zero, runner.min_sun_elevation, runner.refresh_delay, \
-            runner.cfg.get('HyperSAS', 'sip', fallback='???')
+            runner.pilot.compass_zero, runner.min_sun_elevation, runner.refresh_delay
     raise dash.exceptions.PreventUpdate()
 
 
@@ -622,35 +640,86 @@ def set_refresh_sun_elevation(value, _, init):
     raise dash.exceptions.PreventUpdate()
 
 
-# @app.callback(Output('no_output_4', 'children'),
-#               [Input('filtering', 'value')])
-# def set_filtering(value):
-#     if value is None:
-#         logger.debug('set_filtering: loading')
-#         raise dash.exceptions.PreventUpdate()
-#     logger.debug('set_filtering: ' + str(value))
+@app.callback(Output("device_file_modal", "is_open"),
+              [Input("trigger_device_file_modal", "n_clicks"),
+               Input("device_file_modal_close", "n_clicks")],
+              [State("device_file_modal", "is_open")])
+def toggle_device_file_modal(n1, n2, is_open):
+    if n1 or n2:
+        return not is_open
+    return is_open
 
 
-@app.callback([Output('hypersas_device_file_init', 'children'),
-               Output('hypersas_device_file', 'valid'), Output('hypersas_device_file', 'invalid')],
-              [Input('hypersas_device_file', 'value'), Input('hypersas_device_file', 'loading_state')],
-              [State('hypersas_device_file_init', 'children')])
-def set_hypersas_device_file(device_file, _, init):
+@app.callback([Output("device_file_modal_alert_success", "is_open"),
+               Output("device_file_modal_alert_fail", "is_open"),
+               Output("device_file_modal_alert_fail", "children"),
+               Output('select_device_file', 'options'),
+               Output('select_device_file', 'value')],
+              [Input("device_file_modal_update_options", "children"), Input('upload_device_file', 'contents')],
+              [State('upload_device_file', 'filename'),
+               State('upload_device_file', 'last_modified')])
+def upload_device_file(change_option, content, filename, last_modified):
+    flag_success = False
+    flag_fail = False
+    error_message = "Unable to import device file. "
     trigger = dash.callback_context.triggered[0]['prop_id']
-    if trigger == 'hypersas_device_file.value':
-        if init is None:
-            logger.debug('set_hypersas_device_file: init device_file')
-            return True, False, False
-        logger.debug('set_hypersas_device_file: ' + str(device_file))
-        if os.path.isfile(device_file):
-            runner.hypersas.set_parser(device_file)
-            runner.set_cfg_variable('HyperSAS', 'sip', device_file)
-            valid = True
-        else:
-            valid = False
-        return init, valid, not valid
-    elif trigger == 'hypersas_device_file.loading_state':
-        logger.debug('set_hypersas_device_file: loading')
+    if trigger == 'upload_device_file.contents':
+        if content is not None:
+            path_to_file = os.path.join(runner.cfg.get('HyperSAS', 'path_to_device_files'), filename)
+            logger.debug('upload_device_file: loading %s' % filename)
+            try:
+                write_file(path_to_file, content)
+                runner.hypersas.set_parser(path_to_file)  # Updating HyperSAS automatically updates Es if loaded
+                runner.set_cfg_variable('HyperSAS', 'sip', path_to_file)
+                flag_success = True
+            except BadZipFile as e:
+                logger.warning('upload_device_file: unable to load file')
+                logger.warning(e)
+                error_message += str(e) + ' or sip file.'
+                flag_fail = True
+            except Exception as e:
+                logger.warning('upload_device_file: unable to load file')
+                logger.warning(e)
+                error_message += str(e)
+                flag_fail = True
+    elif trigger == 'device_file_modal_update_options.children':
+        logger.debug('upload_device_file: update available/selected options')
+        if not change_option:
+            raise dash.exceptions.PreventUpdate()
+    current_device_file = os.path.basename(runner.hypersas._parser_device_file)
+    device_file_list = [{'label': f, 'value': f} for f in os.listdir(runner.cfg.get('HyperSAS', 'path_to_device_files'))
+                        if os.path.isfile(os.path.join(runner.cfg.get('HyperSAS', 'path_to_device_files'), f)) and f[-4:] == '.sip']
+    return flag_success, flag_fail, error_message, device_file_list, current_device_file
+
+
+def write_file(filename, content):
+    data = content.encode("utf8").split(b";base64,")[1]
+    with open(filename, "wb") as fp:
+        fp.write(base64.decodebytes(data))
+
+
+@app.callback([Output("device_file_modal_alert_fail_sel", "is_open"),
+               Output("device_file_modal_alert_fail_sel", "children"),
+               Output("device_file_modal_update_options", "children")],
+              [Input('select_device_file', 'value')])
+def select_device_file(filename):
+    if filename is not None:
+        path_to_file = os.path.join(runner.cfg.get('HyperSAS', 'path_to_device_files'), filename)
+        if runner.hypersas._parser_device_file == path_to_file:
+            # Likely chained call so prevent update
+            raise dash.exceptions.PreventUpdate()
+        logger.debug('select_device_file: loading %s' % filename)
+        try:
+            runner.hypersas.set_parser(path_to_file)  # Updating HyperSAS automatically updates Es if loaded
+            runner.set_cfg_variable('HyperSAS', 'sip', path_to_file)
+        except BadZipFile as e:
+            logger.warning('upload_device_file: unable to load file')
+            logger.warning(e)
+            return True, "Unable to import device file. " + str(e) + ' or sip file.', True
+        except Exception as e:
+            logger.warning('update_device_file: unable to load file')
+            logger.warning(e)
+            return True, "Unable to import device file. " + str(e), True
     raise dash.exceptions.PreventUpdate()
 
 

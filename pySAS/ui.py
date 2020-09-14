@@ -596,6 +596,9 @@ def set_gps_orientation(value, _, init):
         if init is None:
             logger.debug('set_gps_orientation: init min')
             return True
+        if value is None:
+            logger.debug('set_gps_orientation: None value ignored')
+            raise dash.exceptions.PreventUpdate()
         logger.debug('set_gps_orientation: ' + str(value))
         runner.pilot.compass_zero = value
         runner.set_cfg_variable('AutoPilot', 'gps_orientation_on_ship', value)
@@ -613,6 +616,9 @@ def set_min_sun_elevation(value, _, init):
         if init is None:
             logger.debug('set_min_sun_elevation: init min')
             return True
+        if value is None:
+            logger.debug('set_gps_orientation: None value ignored')
+            raise dash.exceptions.PreventUpdate()
         logger.debug('set_min_sun_elevation: ' + str(value))
         runner.min_sun_elevation = value
         runner.set_cfg_variable('Runner', 'min_sun_elevation', value)
@@ -630,6 +636,9 @@ def set_refresh_sun_elevation(value, _, init):
         if init is None:
             logger.debug('set_refresh_sun_elevation: init refresh')
             return True
+        if value is None:
+            logger.debug('set_gps_orientation: None value ignored')
+            raise dash.exceptions.PreventUpdate()
         logger.debug('set_refresh_sun_elevation: ' + str(value))
         if value < 0:
             logger.debug('set_refresh_sun_elevation: invalid input' + str(value))

@@ -130,6 +130,8 @@ class Runner:
                             self.__logger.info('fall asleep')
                             self.indexing_table.stop()
                             self.hypersas.stop()
+                            if self.es:
+                                self.es.stop()
                             self.gps.stop_logging()
                             self.asleep = True
                         self.stop_sleep_timestamp = None
@@ -143,6 +145,8 @@ class Runner:
                                 self.get_time_sync()
                             self.indexing_table.start()
                             self.gps.start_logging()
+                            if self.es:
+                                self.es.start()
                             self.hypersas.start()
                             self.asleep = False
                     self.start_sleep_timestamp = None

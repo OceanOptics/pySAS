@@ -7,7 +7,7 @@ import sys
 import traceback
 from geomag.geomag import GeoMag
 
-__version__ = '0.3.8'
+__version__ = '0.3.9'
 
 # Global Variables
 CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg.ini')

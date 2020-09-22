@@ -373,10 +373,10 @@ def set_hypersas_switch(value, _, get_switch_n_updates, get_switch_last_n_update
     if trigger == 'hypersas_switch.value':
         if value == ['on']:
             logger.debug('set_hypersas_switch: start')
-            runner.hypersas.start()
             runner.gps.start_logging()
             if runner.es:
                 runner.es.start()
+            runner.hypersas.start()
         else:
             logger.debug('set_hypersas_switch: stop')
             runner.hypersas.stop()

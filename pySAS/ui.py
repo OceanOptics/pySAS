@@ -189,7 +189,7 @@ app.layout = dbc.Container([dbc.Row([
     ], className='col-md-3 col-lg-2 d-none d-md-block bg-light sidebar'),
     html.Div(id='no_output_0', className='d-none'),
     html.Div(id='no_output_1', className='d-none'),
-    # html.Div(id='no_output_2', className='d-none'),
+    html.Div(id='no_output_2', className='d-none'),
     html.Div(id='operation_mode_last_value', className='d-none'),  # , children=runner.operation_mode),
     html.Div(id='tower_switch_last_value', className='d-none'),
     # , children=['on'] if runner.indexing_table.alive else []),
@@ -774,6 +774,26 @@ def stop_dash():
     if func is None:
         raise RuntimeError('Not running with the Werkzeug Server')
     func()
+
+
+app.clientside_callback(
+    """
+    function(value) {
+        if (value.includes('Shutting down')) {
+            setTimeout(function() {
+                var body = document.getElementById('halt_modal_body');
+                body.innerHTML = "The system is down. You can safely unplug the power.";
+                var btn = document.getElementById('halt_modal_halt');
+                btn.innerHTML = "Down";
+                btn.classList.add("disabled")
+            }, 29000);
+        }
+        return '';
+    }
+    """,
+    Output('no_output_2', 'children'),
+    [Input('halt_modal_body', 'children')]
+)
 
 
 ###########

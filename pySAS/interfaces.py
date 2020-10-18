@@ -12,10 +12,11 @@ from gpiozero.exc import BadPinFactory
 import os
 from ubxtranslator.core import Parser as UBXParser
 from pySAS.ubxtranslator_messages import NAV_ARDUSIMPLE
-
+from configparser import NoOptionError
 import pytz
 from pySatlantic.instrument import Instrument as SatlanticParser
 from pySatlantic.instrument import FrameError as SatlanticFrameError
+from pySatlantic.instrument import CalibrationFileError as SatlanticCalibrationFileError
 import atexit
 
 
@@ -79,7 +80,7 @@ class IndexingTable:
         # Loggers
         self.__logger = logging.getLogger(self.__class__.__name__)
         self._log_data = Log({'filename_prefix': self.__class__.__name__,
-                              'path': cfg.get(self.__class__.__name__, 'path',
+                              'path': cfg.get(self.__class__.__name__, 'path_to_data',
                                               fallback=os.path.join(os.path.dirname(__file__), 'data')),
                               'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
                               'variable_names': ['position', 'stall_flag', 'type'],
@@ -371,7 +372,7 @@ class Sensor:
         # Loggers
         self.__logger = logging.getLogger(self.__class__.__name__)
         self._data_logger = Log({'filename_prefix': self.__class__.__name__,
-                                 'path': cfg.get(self.__class__.__name__, 'path',
+                                 'path': cfg.get(self.__class__.__name__, 'path_to_data',
                                                  fallback=os.path.join(os.path.dirname(__file__), 'data')),
                                  'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
         # Serial
@@ -432,7 +433,7 @@ class GPS(Sensor):
 
         # Update loggers
         self._data_logger = Log({'filename_prefix': self.__class__.__name__,
-                                 'path': cfg.get(self.__class__.__name__, 'path',
+                                 'path': cfg.get(self.__class__.__name__, 'path_to_data',
                                                  fallback=os.path.join(os.path.dirname(__file__), 'data')),
                                  'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
                                  'variable_names': ['gps_datetime', 'datetime_accuracy', 'datetime_valid',
@@ -602,11 +603,10 @@ class HyperOCR(Sensor):
 
         if data_logger is None:
             self._data_logger = LogBinary({'filename_prefix': self.__class__.__name__,
-                                           'path': cfg.get(self.__class__.__name__, 'path',
+                                           'path': cfg.get(self.__class__.__name__, 'path_to_data',
                                                            fallback=os.path.join(os.path.dirname(__file__), 'data')),
                                            'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
             self._data_logger.timestamp_packer = pack_timestamp_satlantic
-            # TODO _log_data add custom header matching files from HyperSAS
         else:
             self._data_logger = data_logger
 
@@ -647,48 +647,32 @@ class HyperOCR(Sensor):
         self.packet_Es_dark_parsed = float('nan')
         self.packet_THS_parsed = float('nan')
 
-        # Load device file
+        # Set device file (which sets dispatcher and wavelengths)
+        self._parser = SatlanticParser()
+        self._parser_device_file = None
         self.__immersed = cfg.getboolean(self.__class__.__name__, 'immersed', fallback=False)
+        self._dispatcher = dict()
+        self.Lt_wavelength, self.Li_wavelength, self.Es_wavelength = None, None, None
         if parser is None:
-            self._parser_device_file = cfg.get(self.__class__.__name__, 'sip')
-            self._parser = SatlanticParser(self._parser_device_file, self.__immersed)
+            try:
+                self.set_parser(cfg.get(self.__class__.__name__, 'sip'))
+            except NoOptionError:
+                self.__logger.warning('Calibration file parameter "sip" absent from pysas_cfg.ini.')
+            except FileNotFoundError:
+                self.__logger.critical('The calibration file specified in the configuration was not found. '
+                                    'Please set a calibration file using the button "Select or Upload" under '
+                                    'the section "HyperSAS Device File" at the bottom of the sidebar.')
+            except SatlanticCalibrationFileError:
+                self.__logger.critical('Error while loading the calibration file specified in the configuration. '
+                                       'Please set a new calibration file using the button "Select or Upload" under '
+                                       'the section "HyperSAS Device File" at the bottom of the sidebar.')
         else:
-            self._parser_device_file = None
             self._parser = parser
-        # Dispatcher
-        self._dispatcher = {}
-        Es_frame_header = None
-        for packet_header, cal in self._parser.cal.items():
-            if 'SATTHS' in packet_header:
-                self._dispatcher[packet_header] = 'THS'
-            elif 'LT_SATHSL' == cal.core_groupname:
-                self._dispatcher[packet_header] = 'Lt'
-                Lt_frame_header = packet_header
-            elif 'LI_SATHSL' == cal.core_groupname:
-                self._dispatcher[packet_header] = 'Li'
-                Li_frame_header = packet_header
-            elif 'ES_SATHSE' == cal.core_groupname:
-                self._dispatcher[packet_header] = 'Es'
-                Es_frame_header = packet_header
-            elif 'LT_SATHLD' == cal.core_groupname:
-                self._dispatcher[packet_header] = 'Lt_dark'
-            elif 'LI_SATHLD' == cal.core_groupname:
-                self._dispatcher[packet_header] = 'Li_dark'
-            elif 'ES_SATHED' == cal.core_groupname:
-                self._dispatcher[packet_header] = 'Es_dark'
-            else:
-                raise ValueError('Unable to find type of HyperSAS frame header.')
-        # Wavelengths
-        self.Lt_wavelength = [float(self._parser.cal[Lt_frame_header].id[i])
-                              for i in self._parser.cal[Lt_frame_header].core_variables]
-        self.Li_wavelength = [float(self._parser.cal[Li_frame_header].id[i])
-                              for i in self._parser.cal[Li_frame_header].core_variables]
-        if Es_frame_header:
-            self.Es_wavelength = [float(self._parser.cal[Es_frame_header].id[i])
-                                  for i in self._parser.cal[Es_frame_header].core_variables]
-        else:
-            self.Es_wavelength = float('nan')
+            self.set_dispatcher()
+            self.set_wavelengths()
+
         self.__missing_packet_header = []
+        self.__missing_dispatcher_key = []
 
     def set_parser(self, device_file):
         if self._parser_device_file == device_file:
@@ -699,10 +683,104 @@ class HyperOCR(Sensor):
         if self.alive:
             was_alive = True
             self.stop()
-        self._parser = SatlanticParser(device_file, self.__immersed)
+        self._parser.cal = dict()  # Reset calibration files loaded
+        self._parser.read_calibration(device_file, self.__immersed)
         self._parser_device_file = device_file
+        self.reset_buffers()
+        self.set_dispatcher()
+        self.set_wavelengths()
         if was_alive:
             self.start()
+
+    def set_dispatcher(self):
+        self._dispatcher = dict()
+        for packet_header, cal in self._parser.cal.items():
+            if 'SATTHS' in packet_header:
+                self._dispatcher[packet_header] = 'THS'
+            elif 'LT' == cal.core_groupname and 'SATHSL' in packet_header:
+                self._dispatcher[packet_header] = 'Lt'
+            elif 'LI' == cal.core_groupname and 'SATHSL' in packet_header:
+                self._dispatcher[packet_header] = 'Li'
+            elif 'ES' == cal.core_groupname and 'SATHSE' in packet_header:
+                self._dispatcher[packet_header] = 'Es'
+            elif 'LT' == cal.core_groupname and 'SATHLD' in packet_header:
+                self._dispatcher[packet_header] = 'Lt_dark'
+            elif 'LI' == cal.core_groupname and 'SATHLD' in packet_header:
+                self._dispatcher[packet_header] = 'Li_dark'
+            elif 'ES' == cal.core_groupname and 'SATHED' in packet_header:
+                self._dispatcher[packet_header] = 'Es_dark'
+            else:
+                raise ValueError('Unable to find type of HyperSAS frame header.')
+
+    def set_wavelengths(self):
+        Lt_frame_header, Li_frame_header, Es_frame_header = None, None, None
+        for packet_header, cal in self._parser.cal.items():
+            if 'LT' == cal.core_groupname and 'SATHSL' in packet_header:
+                Lt_frame_header = packet_header
+            elif 'LI' == cal.core_groupname and 'SATHSL' in packet_header:
+                Li_frame_header = packet_header
+            elif 'ES' == cal.core_groupname and 'SATHSE' in packet_header:
+                Es_frame_header = packet_header
+        if Lt_frame_header:
+            self.Lt_wavelength = [float(self._parser.cal[Lt_frame_header].id[i])
+                                  for i in self._parser.cal[Lt_frame_header].core_variables]
+        else:
+            self.Es_wavelength = float('nan')
+        if Li_frame_header:
+            self.Li_wavelength = [float(self._parser.cal[Li_frame_header].id[i])
+                                  for i in self._parser.cal[Li_frame_header].core_variables]
+        else:
+            self.Es_wavelength = float('nan')
+        if Es_frame_header:
+            self.Es_wavelength = [float(self._parser.cal[Es_frame_header].id[i])
+                                  for i in self._parser.cal[Es_frame_header].core_variables]
+        else:
+            self.Es_wavelength = float('nan')
+
+    def reset_buffers(self, raw=True, parsed=True):
+        if raw:
+            self._packet_Lt_raw = None
+            self._packet_Lt_dark_raw = None
+            self._packet_Li_raw = None
+            self._packet_Li_dark_raw = None
+            self._packet_Es_raw = None
+            self._packet_Es_dark_raw = None
+            self._packet_THS_raw = None
+
+            self._packet_Lt_received = float('nan')
+            self._packet_Lt_dark_received = float('nan')
+            self._packet_Li_received = float('nan')
+            self._packet_Li_dark_received = float('nan')
+            self._packet_Es_received = float('nan')
+            self._packet_Es_dark_received = float('nan')
+            self._packet_THS_received = float('nan')
+        if parsed:
+            self.Lt = None
+            self.Lt_dark = None
+            self.Li = None
+            self.Li_dark = None
+            self.Es = None
+            self.Es_dark = None
+            self.roll = float('nan')
+            self.pitch = float('nan')
+            self.compass = float('nan')  # Compass heading measured
+            self.compass_adj = float('nan')  # Compass heading corrected for magnetic declination
+
+            self.packet_Lt_parsed = float('nan')
+            self.packet_Lt_dark_parsed = float('nan')
+            self.packet_Li_parsed = float('nan')
+            self.packet_Li_dark_parsed = float('nan')
+            self.packet_Es_parsed = float('nan')
+            self.packet_Es_dark_parsed = float('nan')
+            self.packet_THS_parsed = float('nan')
+
+    def start(self):
+        if not self._parser.cal:
+            self.__logger.critical('A calibration file is required for the system to work. '
+                                   'Please set a calibration file using the button "Select or Upload" under '
+                                   'the section "HyperSAS Device File" at the bottom of the sidebar.')
+        else:
+            super().start()
 
     def run(self):
         while self.alive: # and self._serial.is_open:
@@ -731,6 +809,8 @@ class HyperOCR(Sensor):
                 self._data_logger.write(unknown_bytes, timestamp)
                 unknown_bytes_header = unknown_bytes[0:10].decode(self._parser.ENCODING, self._parser.UNICODE_HANDLING)
                 if unknown_bytes_header not in self.__missing_packet_header:
+                    if len(self.__missing_dispatcher_key) > 100:
+                        self.__missing_packet_header = list()
                     self.__missing_packet_header.append(unknown_bytes_header)
                     self.__logger.info('Data logged not registered: ' + str(unknown_bytes_header) + '...')
             if packet:
@@ -738,88 +818,126 @@ class HyperOCR(Sensor):
                 self.dispatch_packet(packet_header, packet, timestamp)
 
     def dispatch_packet(self, packet_header, packet, timestamp):
-        if self._dispatcher[packet_header] == 'THS':
-            self._packet_THS_raw = packet
-            self._packet_THS_received = timestamp
-        elif self._dispatcher[packet_header] == 'Lt':
-            self._packet_Lt_raw = packet
-            self._packet_Lt_received = timestamp
-        elif self._dispatcher[packet_header] == 'Lt_dark':
-            self._packet_Lt_dark_raw = packet
-            self._packet_Lt_dark_received = timestamp
-        elif self._dispatcher[packet_header] == 'Li':
-            self._packet_Li_raw = packet
-            self._packet_Li_received = timestamp
-        elif self._dispatcher[packet_header] == 'Li_dark':
-            self._packet_Li_dark_raw = packet
-            self._packet_Li_dark_received = timestamp
-        elif self._dispatcher[packet_header] == 'Es':
-            self._packet_Es_raw = packet
-            self._packet_Es_received = timestamp
-        elif self._dispatcher[packet_header] == 'Es_dark':
-            self._packet_Es_dark_raw = packet
-            self._packet_Es_dark_received = timestamp
+        try:
+            if self._dispatcher[packet_header] == 'THS':
+                self._packet_THS_raw = packet
+                self._packet_THS_received = timestamp
+            elif self._dispatcher[packet_header] == 'Lt':
+                self._packet_Lt_raw = packet
+                self._packet_Lt_received = timestamp
+            elif self._dispatcher[packet_header] == 'Lt_dark':
+                self._packet_Lt_dark_raw = packet
+                self._packet_Lt_dark_received = timestamp
+            elif self._dispatcher[packet_header] == 'Li':
+                self._packet_Li_raw = packet
+                self._packet_Li_received = timestamp
+            elif self._dispatcher[packet_header] == 'Li_dark':
+                self._packet_Li_dark_raw = packet
+                self._packet_Li_dark_received = timestamp
+            elif self._dispatcher[packet_header] == 'Es':
+                self._packet_Es_raw = packet
+                self._packet_Es_received = timestamp
+            elif self._dispatcher[packet_header] == 'Es_dark':
+                self._packet_Es_dark_raw = packet
+                self._packet_Es_dark_received = timestamp
+        except KeyError:
+            if packet_header not in self.__missing_dispatcher_key:
+                if len(self.__missing_dispatcher_key) > 100:
+                    self.__missing_dispatcher_key = list()
+                self.__missing_dispatcher_key.append(packet_header)
+                self.__logger.warning(f'Dispatcher does not support packet {packet_header}.')
 
     def parse_packets(self):
         """
         Parse packet received since last parsing. Called by UX
         """
-        try:
-            # Parse THS
-            if self._packet_THS_received > self.packet_THS_parsed or \
-                    (isnan(self.packet_THS_parsed) and not isnan(self._packet_THS_received)):
+
+        # Parse THS
+        if self._packet_THS_received > self.packet_THS_parsed or \
+                (isnan(self.packet_THS_parsed) and not isnan(self._packet_THS_received)):
+            try:
                 THS, _ = self._parser.parse_frame(self._packet_THS_raw)
                 self.packet_THS_parsed = time()
-                self.roll = THS['ROLL']
-                self.pitch = THS['PITCH']
-                self.compass = THS['COMP']
-            # Parse Lt Dark
-            if self._packet_Lt_dark_received > self.packet_Lt_dark_parsed or \
-                    (isnan(self.packet_Lt_dark_parsed) and not isnan(self._packet_Lt_dark_received)):
+                self.roll, self.pitch, self.compass = THS['ROLL'], THS['PITCH'], THS['COMP']
+            except SatlanticFrameError as e:
+                self.__logger.error('THS:' + e)
+                self.roll, self.pitch, self.compass = float('nan'), float('nan'), float('nan')
+                self._packet_THS_received = float('nan')
+        # Parse Lt Dark
+        if self._packet_Lt_dark_received > self.packet_Lt_dark_parsed or \
+                (isnan(self.packet_Lt_dark_parsed) and not isnan(self._packet_Lt_dark_received)):
+            try:
                 Lt_dark, _ = self._parser.parse_frame(self._packet_Lt_dark_raw)
                 self.packet_Lt_dark_parsed = time()
-                self.Lt_dark = Lt_dark['LT_SATHLD']
-            # Parse Lt
-            if self._packet_Lt_received > self.packet_Lt_parsed or \
-                    (isnan(self.packet_Lt_parsed) and not isnan(self._packet_Lt_received)):
+                self.Lt_dark = Lt_dark['LT']
+            except SatlanticFrameError as e:
+                self.__logger.error('Lt_dark:' + e)
+                self.Lt_dark = None
+                self._packet_Lt_dark_received = float('nan')
+        # Parse Lt
+        if self._packet_Lt_received > self.packet_Lt_parsed or \
+                (isnan(self.packet_Lt_parsed) and not isnan(self._packet_Lt_received)):
+            try:
                 Lt, _ = self._parser.parse_frame(self._packet_Lt_raw)
                 self.packet_Lt_parsed = time()
                 if self.Lt_dark is not None:
-                    self.Lt = Lt['LT_SATHSL'] - self.Lt_dark
+                    self.Lt = Lt['LT'] - self.Lt_dark
                 else:
-                    self.Lt = Lt['LT_SATHSL']
-            # Parse Li Dark
-            if self._packet_Li_dark_received > self.packet_Li_dark_parsed or \
-                    (isnan(self.packet_Li_dark_parsed) and not isnan(self._packet_Li_dark_received)):
+                    self.Lt = Lt['LT']
+            except SatlanticFrameError as e:
+                self.__logger.error('Lt:' + e)
+                self.Lt = None
+                self._packet_Lt_received = float('nan')
+        # Parse Li Dark
+        if self._packet_Li_dark_received > self.packet_Li_dark_parsed or \
+                (isnan(self.packet_Li_dark_parsed) and not isnan(self._packet_Li_dark_received)):
+            try:
                 Li_dark, _ = self._parser.parse_frame(self._packet_Li_dark_raw)
                 self.packet_Li_dark_parsed = time()
-                self.Li_dark = Li_dark['LI_SATHLD']
-            # Parse Li
-            if self._packet_Li_received > self.packet_Li_parsed or \
-                    (isnan(self.packet_Li_parsed) and not isnan(self._packet_Li_received)):
+                self.Li_dark = Li_dark['LI']
+            except SatlanticFrameError as e:
+                self.__logger.error('Li_dark:' + e)
+                self.Li_dark = None
+                self._packet_Li_dark_received = float('nan')
+        # Parse Li
+        if self._packet_Li_received > self.packet_Li_parsed or \
+                (isnan(self.packet_Li_parsed) and not isnan(self._packet_Li_received)):
+            try:
                 Li, _ = self._parser.parse_frame(self._packet_Li_raw)
                 self.packet_Li_parsed = time()
                 if self.Li_dark is not None:
-                    self.Li = Li['LI_SATHSL'] - self.Li_dark
+                    self.Li = Li['LI'] - self.Li_dark
                 else:
-                    self.Li = Li['LI_SATHSL']
-            # Parse Es Dark
-            if self._packet_Es_dark_received > self.packet_Es_dark_parsed or \
-                    (isnan(self.packet_Es_dark_parsed) and not isnan(self._packet_Es_dark_received)):
+                    self.Li = Li['LI']
+            except SatlanticFrameError as e:
+                self.__logger.error('Li:' + e)
+                self.Li = None
+                self._packet_Li_received = float('nan')
+        # Parse Es Dark
+        if self._packet_Es_dark_received > self.packet_Es_dark_parsed or \
+                (isnan(self.packet_Es_dark_parsed) and not isnan(self._packet_Es_dark_received)):
+            try:
                 Es_dark, _ = self._parser.parse_frame(self._packet_Es_dark_raw)
                 self.packet_Es_dark_parsed = time()
-                self.Es_dark = Es_dark['ES_SATHED']
-            # Parse Es
-            if self._packet_Es_received > self.packet_Es_parsed or \
-                    (isnan(self.packet_Es_parsed) and not isnan(self._packet_Es_received)):
+                self.Es_dark = Es_dark['ES']
+            except SatlanticFrameError as e:
+                self.__logger.error('Es_dark:' + e)
+                self.Es_dark = None
+                self._packet_Es_dark_received = float('nan')
+        # Parse Es
+        if self._packet_Es_received > self.packet_Es_parsed or \
+                (isnan(self.packet_Es_parsed) and not isnan(self._packet_Es_received)):
+            try:
                 Es, _ = self._parser.parse_frame(self._packet_Es_raw)
                 self.packet_Es_parsed = time()
                 if self.Es_dark is not None:
-                    self.Es = Es['ES_SATHSE'] - self.Es_dark
+                    self.Es = Es['ES'] - self.Es_dark
                 else:
-                    self.Es = Es['ES_SATHSE']
-        except SatlanticFrameError as e:
-            self.__logger.error(e)
+                    self.Es = Es['ES']
+            except SatlanticFrameError as e:
+                self.__logger.error('Es:' + e)
+                self.Es = None
+                self._packet_Es_received = float('nan')
 
 
 class HyperSAS(HyperOCR):

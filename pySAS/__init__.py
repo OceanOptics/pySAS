@@ -6,16 +6,13 @@ import os
 import sys
 import traceback
 from geomag.geomag import GeoMag
+import configparser
 
-__version__ = '0.3.9'
+__version__ = '0.3.10'
 
 # Global Variables
 CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg.ini')
 LOGGING_LEVEL = logging.DEBUG
-
-# Setup application logging
-if not os.path.isdir('logs'):
-    os.mkdir('logs')
 
 # Setup logging
 logging.basicConfig(level=LOGGING_LEVEL)
@@ -30,10 +27,18 @@ def except_hook(exc_type, exc_value, exc_tb):
 
 sys.excepthook = except_hook
 
-# Logging in file
-path_to_log = os.path.join(os.path.dirname(__file__), 'logs')
+# Get path to engineering logs
+cfg = configparser.ConfigParser()
+try:
+    if not cfg.read(CFG_FILENAME):
+        root_logger.critical('Configuration file not found')
+except configparser.Error as e:
+    root_logger.critical('Unable to parse configuration file')
+path_to_log = cfg.get('Runner', 'path_to_logs', fallback=os.path.join(os.path.dirname(__file__), 'logs'))
 if not os.path.isdir(path_to_log):
     os.mkdir(path_to_log)
+
+# Logging to disk
 log_filename = os.path.join(path_to_log, 'pySAS.log')
 ch_file = RotatingFileHandler(log_filename, maxBytes=1048576 * 5, backupCount=9)
 formater_file = logging.Formatter("%(asctime)s %(levelname)-7.7s [%(name)s]  %(message)s")

@@ -33,7 +33,7 @@ app.title = 'pySAS v' + __version__
 figure_sun_model = html.P("")
 figure_spectrum_history = html.P("")
 
-if runner.es is not None:
+if runner.es:
     core_instruments_names = "HyperSAS+Es"
 else:
     core_instruments_names = "HyperSAS"
@@ -153,7 +153,9 @@ controls_layout = [
                            dbc.FormGroup([dbc.Label('Select device file:', html_for='select_device_file'),
                            dbc.RadioItems(id='select_device_file', options=[], labelCheckedStyle={"color": "green"})])]), md=6),
                    dbc.Col(dcc.Upload(id='upload_device_file', children=html.Div(['Drag and Drop or ',
-                                                                        html.A('Select Device Files', style={'color': '#007bff'})]),
+                                                                        html.A('Select Device Files',
+                                                                               style={'color': '#007bff',
+                                                                                      'cursor': 'pointer'})]),
                                       style={'padding': '40px 40px', 'borderWidth': '1px', 'borderStyle': 'dashed',
                                              'borderRadius': '5px', 'textAlign': 'center', 'margin': '5px'}), md=6)])),
                dbc.ModalFooter([dbc.Button("Close", id="device_file_modal_close", className="mr-1")]),
@@ -253,9 +255,9 @@ def update_time(_):
 def set_operation_mode(operation_mode, tower_switch, operation_mode_previous, tower_switch_previous,
                        get_switch_n_updates, get_switch_last_n_updates):
     trigger = dash.callback_context.triggered[0]['prop_id']
-    logger.debug('set_operation_mode: ' + str(operation_mode) + ', ' + str(tower_switch) + ', ' +
-                 str(operation_mode_previous) + ', ' + str(tower_switch_previous) + ', ' +
-                 str(get_switch_n_updates) + ', ' + str(get_switch_last_n_updates) + ', ' + trigger)
+    logger.debug(f'set_operation_mode: {operation_mode}, {tower_switch}, '
+                 f'{operation_mode_previous}, {tower_switch_previous}, '
+                 f'{get_switch_n_updates}, {get_switch_last_n_updates}, {trigger}')
     if operation_mode is None and tower_switch is None:
         logger.debug('set_operation_mode: loading')
         raise dash.exceptions.PreventUpdate()
@@ -334,8 +336,6 @@ def get_switch(n_intervals, current_hypersas_switch_value, current_gps_switch_va
                n_updates):
     if n_intervals is None:
         logger.debug('get_switch: loading')
-    elif runner.operation_mode == 'manual':
-        raise dash.exceptions.PreventUpdate()
     if runner.hypersas.alive:
         hypersas_switch_value = ['on']
     else:
@@ -678,7 +678,20 @@ def upload_device_file(change_option, content, filename, last_modified):
             logger.debug('upload_device_file: loading %s' % filename)
             try:
                 write_file(path_to_file, content)
-                runner.hypersas.set_parser(path_to_file)  # Updating HyperSAS automatically updates Es if loaded
+                if runner.es:
+                    es_was_alive = False
+                    if runner.es.alive:
+                        es_was_alive = True
+                        runner.es.stop()
+                runner.hypersas.set_parser(path_to_file)
+                if runner.es:
+                    # Updating HyperSAS parser automatically updates Es parser
+                    # However, the dispatcher and wavelength of the es still have to be updated manually
+                    runner.es.reset_buffers()
+                    runner.es.set_dispatcher()
+                    runner.es.set_wavelengths()
+                    if es_was_alive:
+                        runner.es.start()
                 runner.set_cfg_variable('HyperSAS', 'sip', path_to_file)
                 flag_success = True
             except BadZipFile as e:
@@ -695,9 +708,21 @@ def upload_device_file(change_option, content, filename, last_modified):
         logger.debug('upload_device_file: update available/selected options')
         if not change_option:
             raise dash.exceptions.PreventUpdate()
-    current_device_file = os.path.basename(runner.hypersas._parser_device_file)
-    device_file_list = [{'label': f, 'value': f} for f in os.listdir(runner.cfg.get('HyperSAS', 'path_to_device_files'))
-                        if os.path.isfile(os.path.join(runner.cfg.get('HyperSAS', 'path_to_device_files'), f)) and f[-4:] == '.sip']
+    path_to_device_files = runner.cfg.get('HyperSAS', 'path_to_device_files')
+    if not os.path.isdir(path_to_device_files):
+        os.mkdir(path_to_device_files)
+    try:
+        # current_device_file = f'select_device_file-{os.path.basename(runner.hypersas._parser_device_file)}'
+        if os.path.dirname(runner.hypersas._parser_device_file) == path_to_device_files:
+            current_device_file = os.path.basename(runner.hypersas._parser_device_file)
+        else:
+            current_device_file = runner.hypersas._parser_device_file
+    except TypeError:
+        current_device_file = None
+    device_file_list = [{'label': f, 'value': f} for f in os.listdir(path_to_device_files)
+                        if os.path.isfile(os.path.join(path_to_device_files, f)) and f[-4:] == '.sip']
+    if not device_file_list:
+        device_file_list = [{'label': 'No device file available. Please upload one.', 'value': None, 'disabled': True}]
     return flag_success, flag_fail, error_message, device_file_list, current_device_file
 
 
@@ -712,23 +737,39 @@ def write_file(filename, content):
                Output("device_file_modal_update_options", "children")],
               [Input('select_device_file', 'value')])
 def select_device_file(filename):
-    if filename is not None:
-        path_to_file = os.path.join(runner.cfg.get('HyperSAS', 'path_to_device_files'), filename)
-        if runner.hypersas._parser_device_file == path_to_file:
-            # Likely chained call so prevent update
-            raise dash.exceptions.PreventUpdate()
-        logger.debug('select_device_file: loading %s' % filename)
-        try:
-            runner.hypersas.set_parser(path_to_file)  # Updating HyperSAS automatically updates Es if loaded
-            runner.set_cfg_variable('HyperSAS', 'sip', path_to_file)
-        except BadZipFile as e:
-            logger.warning('upload_device_file: unable to load file')
-            logger.warning(e)
-            return True, "Unable to import device file. " + str(e) + ' or sip file.', True
-        except Exception as e:
-            logger.warning('update_device_file: unable to load file')
-            logger.warning(e)
-            return True, "Unable to import device file. " + str(e), True
+    if not filename:
+        raise dash.exceptions.PreventUpdate()
+    path_to_file = os.path.join(runner.cfg.get('HyperSAS', 'path_to_device_files'), filename)
+    if runner.hypersas._parser_device_file == path_to_file or \
+        runner.hypersas._parser_device_file == filename:
+        # Same value selected so no need to update
+        raise dash.exceptions.PreventUpdate()
+    logger.debug('select_device_file: loading %s' % filename)
+    try:
+        if runner.es:
+            es_was_alive = False
+            if runner.es.alive:
+                es_was_alive = True
+                runner.es.stop()
+        runner.hypersas.set_parser(path_to_file)
+        if runner.es:
+            # Updating HyperSAS parser automatically updates Es parser
+            # However, the dispatcher and wavelength of the es still have to be updated manually
+            runner.es.reset_buffers()
+            runner.es.set_dispatcher()
+            runner.es.set_wavelengths()
+            if es_was_alive:
+                runner.es.start()
+        runner.set_cfg_variable('HyperSAS', 'sip', path_to_file)
+        # Done, raise dash prevent update outside try
+    except BadZipFile as e:
+        logger.warning('select_device_file: unable to load file')
+        logger.warning(e)
+        return True, "Unable to import device file. " + str(e) + ' or sip file.', True
+    except Exception as e:
+        logger.warning('select_device_file: unable to load file')
+        logger.warning(e)
+        return True, "Unable to import device file. " + str(e), True
     raise dash.exceptions.PreventUpdate()
 
 
@@ -879,7 +920,7 @@ def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse
                                       r=[0, 1],
                                       theta=[0, ship],
                                       marker=dict(symbol=['circle', 'triangle-up'], color='#000', size=8),
-                                      name='Ship',
+                                      name='Ship (Dual GPS)',
                                       line_color='black'))
     if not isnan(blind_zone_center) and not isnan(blind_zone_width):
         traces.append(go.Barpolar(r=[1],
@@ -907,7 +948,8 @@ def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse
     if not traces:
         raise dash.exceptions.PreventUpdate()
     layout = go.Layout(title='System Orientation',
-                       showlegend=False,
+                       legend=dict(orientation='h', yanchor='top', y=0),
+                       showlegend=True,
                        polar=dict(radialaxis=dict(visible=False),
                                   angularaxis=dict(visible=True, direction='clockwise', rotation=90)),
                        autosize=True,
@@ -927,26 +969,26 @@ def update_figure_spectrum(_):
     if runner.hypersas.Lt is not None and timestamp - runner.hypersas.packet_Lt_parsed < runner.DATA_EXPIRED_DELAY:
         traces.append(go.Scatter(x=runner.hypersas.Lt_wavelength,
                                  y=runner.hypersas.Lt,
-                                 name='Lt (uW/cm<sup>2</sup>/nm/sr)',
+                                 name='Lt (&mu;W/cm<sup>2</sup>/nm/sr)',
                                  marker={'color': '#37536d'}))
     if runner.hypersas.Li is not None and timestamp - runner.hypersas.packet_Li_parsed < runner.DATA_EXPIRED_DELAY:
         traces.append(go.Scatter(x=runner.hypersas.Li_wavelength,
                                  y=runner.hypersas.Li,
-                                 name='Li (uW/cm<sup>2</sup>/nm/sr)',
+                                 name='Li (&mu;W/cm<sup>2</sup>/nm/sr)',
                                  marker={'color': '#1a76ff'}))
     if runner.es:
         if runner.es.Es is not None and timestamp - runner.es.packet_Es_parsed < runner.DATA_EXPIRED_DELAY:
             traces.append(go.Scatter(x=runner.es.Es_wavelength,
                                      y=runner.es.Es,
                                      yaxis='y2',
-                                     name='Es (uW/cm<sup>2</sup>/nm)',
+                                     name='Es (&mu;W/cm<sup>2</sup>/nm)',
                                      marker={'color': 'orange'}))
     else:
         if runner.hypersas.Es is not None and timestamp - runner.hypersas.packet_Es_parsed < runner.DATA_EXPIRED_DELAY:
             traces.append(go.Scatter(x=runner.hypersas.Es_wavelength,
                                      y=runner.hypersas.Es,
                                      yaxis='y2',
-                                     name='Es (uW/cm<sup>2</sup>/nm)',
+                                     name='Es (&mu;W/cm<sup>2</sup>/nm)',
                                      marker={'color': 'orange'}))
     # Set Layout
     layout = go.Layout(
@@ -957,10 +999,10 @@ def update_figure_spectrum(_):
             y=1.0,
             xanchor='right'
         ),
-        margin=dict(l=40, r=40, t=40, b=30),
-        xaxis=dict(title=dict(text='Wavelength (nm)')),
-        yaxis=dict(title=dict(text='Radiance (uW/cm<sup>2</sup>/nm/sr)')),
-        yaxis2=dict(title=dict(text='Irradiance (uW/cm<sup>2</sup>/nm)'), side="right", anchor="x", overlaying="y")
+        margin=dict(l=50, r=50, t=40, b=40),
+        xaxis=dict(title=dict(text='Wavelength (nm)'), exponentformat='power'),
+        yaxis=dict(title=dict(text='Radiance (&mu;W/cm<sup>2</sup>/nm/sr)'), exponentformat='power'),
+        yaxis2=dict(title=dict(text='Irradiance (&mu;W/cm<sup>2</sup>/nm)'), side="right", anchor="x", overlaying="y")
     )
     return {'data': traces, 'layout': layout}
 

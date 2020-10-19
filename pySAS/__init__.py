@@ -10,11 +10,8 @@ import configparser
 
 __version__ = '0.3.10'
 
-# Global Variables
-CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg.ini')
-LOGGING_LEVEL = logging.DEBUG
-
 # Setup logging
+LOGGING_LEVEL = logging.DEBUG
 logging.basicConfig(level=LOGGING_LEVEL)
 root_logger = logging.getLogger()   # Get root logger
 
@@ -27,13 +24,17 @@ def except_hook(exc_type, exc_value, exc_tb):
 
 sys.excepthook = except_hook
 
+# Get path to configuration file
+if len(sys.argv) == 2:
+    CFG_FILENAME = sys.argv[1]
+else:
+    CFG_FILENAME = os.path.join(os.path.dirname(__file__), 'pysas_cfg.ini')
+
 # Get path to engineering logs
 cfg = configparser.ConfigParser()
-try:
-    if not cfg.read(CFG_FILENAME):
-        root_logger.critical('Configuration file not found')
-except configparser.Error as e:
-    root_logger.critical('Unable to parse configuration file')
+if not cfg.read(CFG_FILENAME):
+    root_logger.critical('Path to configuration file invalid')
+    raise ValueError('Path to configuration file invalid')
 path_to_log = cfg.get('Runner', 'path_to_logs', fallback=os.path.join(os.path.dirname(__file__), 'logs'))
 if not os.path.isdir(path_to_log):
     os.mkdir(path_to_log)

@@ -722,7 +722,7 @@ def upload_device_file(change_option, content, filename, last_modified):
     device_file_list = [{'label': f, 'value': f} for f in os.listdir(path_to_device_files)
                         if os.path.isfile(os.path.join(path_to_device_files, f)) and f[-4:] == '.sip']
     if not device_file_list:
-        device_file_list = [{'label': 'No device file available. Please upload one.', 'value': None, 'disabled': True}]
+        device_file_list = [{'label': 'No device file available. Please upload one.', 'value': 'no-files', 'disabled': True}]
     return flag_success, flag_fail, error_message, device_file_list, current_device_file
 
 

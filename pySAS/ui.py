@@ -780,6 +780,7 @@ def select_device_file(filename):
               [State("halt_modal", "is_open")])
 def toggle_halt_modal(n1, n2, is_open):
     # TODO Fix React warning
+    # TODO Hide modal when system is rebooted
     if n1 or n2:
         return not is_open
     return is_open
@@ -947,7 +948,7 @@ def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse
                                       line_color='black'))
     if not traces:
         raise dash.exceptions.PreventUpdate()
-    layout = go.Layout(title='System Orientation',
+    layout = go.Layout(title='System Orientation (&deg;N)',
                        legend=dict(orientation='h', yanchor='top', y=0),
                        showlegend=True,
                        polar=dict(radialaxis=dict(visible=False),

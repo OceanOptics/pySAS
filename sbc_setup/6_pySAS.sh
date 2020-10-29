@@ -64,6 +64,10 @@ systemctl enable pysas.service
 echo "Authorize shutdown"
 chmod 4755 /sbin/shutdown
 
+# Grant permission to all users to date command
+echo "Authorize date"
+chmod 4755 /bin/date
+
 # Open firewall
 # echo "Open firewall port 8050"
 # ufw allow 8050

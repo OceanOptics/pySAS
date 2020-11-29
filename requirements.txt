@@ -7,4 +7,4 @@ pyserial>=3.4
 pysolar==0.8
 pytz>=2019.3
 ubxtranslator==0.1.1
-pySatlantic==0.2.5b0
+pySatlantic==0.2.6

@@ -24,8 +24,6 @@ logger = logging.getLogger('ui')
 app = dash.Dash(__name__)
 app.title = 'pySAS v' + __version__
 
-# Only run on first version
-
 
 ##########
 # Layout #
@@ -95,16 +93,20 @@ controls_layout = [
     html.Div([
         html.H6('Settings',
                 className='sidebar-heading d-flex justify-content-between align-items-center mt-4 mb-2 text-muted'),
-        # Label Tower Valid Orientation Range
+        # Tower Valid Orientation Range
         dbc.FormGroup([
             dbc.Label("Tower Valid Range"),
-            dbc.Checkbox(id="tower_reverse_valid_orientation",
-                         className="form-check-input", style={'marginLeft': '.3rem'}),
-            dcc.RangeSlider(id='tower_valid_orientation', min=-180, max=180, step=1,  # value=runner.pilot.tower_limits,
-                            marks={i: '{}°'.format(i) for i in [-160, -90, 0, 90, 160]},
-                            tooltip={'always_visible': False, 'placement': 'bottom'}, included=False,
-                            className='wide-slider')
-        ], className='mb-4'),
+            dbc.InputGroup([
+                dbc.InputGroupAddon("Port side", addon_type="prepend"),
+                dbc.Input(id='tower_valid_orientation_prt', type='number', min=-180, max=360, step=1, debounce=True),
+                dbc.InputGroupAddon("°", addon_type="append")
+            ], className="mb-3", size='sm'),
+            dbc.InputGroup([
+                dbc.InputGroupAddon("Starboard", addon_type="prepend"),
+                dbc.Input(id='tower_valid_orientation_stb', type='number', min=-180, max=360, step=1, debounce=True),
+                dbc.InputGroupAddon("°", addon_type="append")
+            ], className="mb-3", size='sm'),
+        ]),
         # GPS Orientation
         dbc.FormGroup([
             dbc.Label("GPS Orientation"),
@@ -133,7 +135,7 @@ controls_layout = [
         #                           options=[{'label': "None", 'value': 'none'}, {'label': "Kalman", 'value': 'kalman'}]),
         #                ]),
         # HyperSAS Device File
-        dbc.FormGroup([dbc.Label("HyperSAS Device File", html_for="trigger_device_file_modal"),
+        dbc.FormGroup([dbc.Label(core_instruments_names + " Device File", html_for="trigger_device_file_modal"),
                        dbc.Button("Select or Upload", id="trigger_device_file_modal", outline=True, color='dark', size='sm')]),
         dbc.Button("Halt", id="trigger_halt_modal", outline=True, color="secondary", size='sm', block=True,
                    className="mt-4 mb-2")
@@ -202,7 +204,6 @@ app.layout = dbc.Container([dbc.Row([
     html.Div(id='get_gps_switch_last_n_updates', className='d-none'),
     dbc.Button(id='load_settings', className='d-none'),
     html.Div(id='tower_valid_orientation_init', className='d-none'),
-    html.Div(id='tower_reverse_valid_orientation_init', className='d-none'),
     html.Div(id='gps_orientation_init', className='d-none'),
     html.Div(id='min_sun_elevation_init', className='d-none'),
     html.Div(id='refresh_sun_elevation_init', className='d-none'),
@@ -215,19 +216,17 @@ app.layout = dbc.Container([dbc.Row([
 ##########
 # Init
 @app.callback([Output('operation_mode', 'value'),
-               Output('tower_valid_orientation', 'value'), Output('tower_reverse_valid_orientation', 'checked'),
+               Output('tower_valid_orientation_prt', 'value'), Output('tower_valid_orientation_stb', 'value'),
                Output('gps_orientation', 'value'),
                Output('min_sun_elevation', 'value'), Output('refresh_sun_elevation', 'value')],
               [Input('load_settings', 'n_clicks')])
 def set_content_on_page_load(n_clicks):
     if n_clicks is None:
-        tower_reverse_valid_orientation = False
-        if runner.pilot.tower_limits[1] < runner.pilot.tower_limits[0]:
-            tower_reverse_valid_orientation = True
-        logger.debug('set_content_on_page_load: ' +
-                     str((runner.operation_mode, runner.pilot.tower_limits, tower_reverse_valid_orientation,
-                          runner.pilot.compass_zero, runner.min_sun_elevation, runner.refresh_delay)))
-        return runner.operation_mode, runner.pilot.tower_limits, tower_reverse_valid_orientation, \
+
+        logger.debug(f'set_content_on_page_load: {runner.operation_mode}, '
+                     f'{runner.pilot.tower_limits[0]}, {runner.pilot.tower_limits[1]}, '
+                     f'{runner.pilot.compass_zero}, {runner.min_sun_elevation}, {runner.refresh_delay}')
+        return runner.operation_mode, runner.pilot.tower_limits[0], runner.pilot.tower_limits[1], \
             runner.pilot.compass_zero, runner.min_sun_elevation, runner.refresh_delay
     raise dash.exceptions.PreventUpdate()
 
@@ -558,33 +557,23 @@ def set_tower_orientation(orientation, _, _2, label_state, zero_n_clicks, zero_n
 
 ###########
 # Settings
-@app.callback([Output('tower_valid_orientation', 'included'),
-               Output('tower_valid_orientation_init', 'children'),
-               Output('tower_reverse_valid_orientation_init', 'children')],
-              [Input('tower_valid_orientation', 'value'), Input('tower_reverse_valid_orientation', 'checked')],
-              [State('tower_valid_orientation_init', 'children'),
-               State('tower_reverse_valid_orientation_init', 'children')])
-def set_tower_valid_orientation(limits, reverse, limits_init, reverse_init):
-    trigger = dash.callback_context.triggered[0]['prop_id']
-    # print(trigger, limits_init, reverse_init)
-    if limits is None:
-        logger.debug('set_tower_valid_orientation: loading')
+@app.callback(Output('tower_valid_orientation_init', 'children'),
+              [Input('tower_valid_orientation_prt', 'value'), Input('tower_valid_orientation_stb', 'value')],
+              [State('tower_valid_orientation_init', 'children')])
+def set_tower_valid_orientation(prt_value, stb_value, init):
+    if prt_value is None or stb_value is None:
+        if init:
+            logger.debug('set_tower_valid_orientation: None value ignored')
+        else:
+            logger.debug(f'set_tower_valid_orientation: loading')
         raise dash.exceptions.PreventUpdate()
-    output_included = True
-    if reverse:
-        limits.reverse()
-        output_included = False
-    if trigger == 'tower_valid_orientation.value' and limits_init is None:
-        logger.debug('set_tower_valid_orientation: init limits')
-        return output_included, True, reverse_init
-    elif trigger == 'tower_reverse_valid_orientation.checked' and reverse_init is None:
-        logger.debug('set_tower_valid_orientation: init reverse')
-        return output_included, True, True
-    else:
-        logger.debug('set_tower_valid_orientation: ' + str(limits))
-        runner.pilot.set_tower_limits(limits)
-        runner.set_cfg_variable('AutoPilot', 'valid_indexing_table_orientation_limits', limits)
-        return output_included, limits_init, reverse_init
+    if not init:
+        logger.debug(f'set_tower_valid_orientation: init')
+        return True
+    logger.debug(f'set_tower_valid_orientation({prt_value}, {stb_value})')
+    runner.pilot.set_tower_limits([prt_value, stb_value])
+    runner.set_cfg_variable('AutoPilot', 'valid_indexing_table_orientation_limits', [prt_value, stb_value])
+    raise dash.exceptions.PreventUpdate()
 
 
 @app.callback(Output('gps_orientation_init', 'children'),
@@ -594,7 +583,7 @@ def set_gps_orientation(value, _, init):
     trigger = dash.callback_context.triggered[0]['prop_id']
     if trigger == 'gps_orientation.value':
         if init is None:
-            logger.debug('set_gps_orientation: init min')
+            logger.debug('set_gps_orientation: init')
             return True
         if value is None:
             logger.debug('set_gps_orientation: None value ignored')
@@ -843,8 +832,8 @@ app.clientside_callback(
 @app.callback(Output('figure_system_orientation', 'figure'),
               [Input('status_refresh_interval', 'n_intervals'),
                Input('tower_orientation', 'value'),
-               Input('tower_valid_orientation', 'value'), Input('tower_reverse_valid_orientation', 'checked')])
-def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse_tower_limits):
+               Input('tower_valid_orientation_prt', 'value'), Input('tower_valid_orientation_stb', 'value')])
+def update_figure_system_orientation(_, tower_orientation, tower_limit_prt, tower_limit_stb):
     timestamp = time()
     # Get Tower Orientation
     trigger = dash.callback_context.triggered[0]['prop_id']
@@ -855,10 +844,10 @@ def update_figure_system_orientation(_, tower_orientation, tower_limits, reverse
     else:
         tower = runner.indexing_table.position
     # Get Tower Limits
-    if trigger == 'tower_valid_orientation.value':
-        auto_pilot_limits = tower_limits
-        if reverse_tower_limits:
-            auto_pilot_limits.reverse()
+    if trigger == 'tower_valid_orientation_prt.value' or trigger == 'tower_valid_orientation_stb.value':
+        if tower_limit_prt is None or tower_limit_stb is None:
+            raise dash.exceptions.PreventUpdate()
+        auto_pilot_limits = [tower_limit_prt, tower_limit_stb]
     else:
         auto_pilot_limits = runner.pilot.tower_limits
     # Compute blind zone to display

@@ -87,7 +87,7 @@ controls_layout = [
     dcc.Slider(id='tower_orientation', min=-180, max=180, step=1, value=96, included=False, disabled=False,
                marks={i: '{}°'.format(i) for i in [-160, -80, 0, 80, 160]},
                tooltip={'always_visible': False, 'placement': 'bottom'},
-               className='wide-slider d-none'),  # Hide bar when switch menu
+               className='d-none'),  # Hide bar when switch menu
 
     # Settings
     html.Div([
@@ -298,7 +298,7 @@ def set_operation_mode(operation_mode, tower_switch, operation_mode_previous, to
                 runner.indexing_table.stop()
     # Get Operation Mode
     tower_switch_class_name = 'mt-1 ml-1'
-    tower_orientation_class_name = 'wide-slider'
+    tower_orientation_class_name = '' #'wide-slider'
     tower_zero_class_name = 'mt-2 ml-1'
     gps_switch_class_name = 'mt-1 ml-1'
     hypersas_switch_class_name = 'mt-1 ml-1'

@@ -222,7 +222,6 @@ app.layout = dbc.Container([dbc.Row([
               [Input('load_settings', 'n_clicks')])
 def set_content_on_page_load(n_clicks):
     if n_clicks is None:
-
         logger.debug(f'set_content_on_page_load: {runner.operation_mode}, '
                      f'{runner.pilot.tower_limits[0]}, {runner.pilot.tower_limits[1]}, '
                      f'{runner.pilot.compass_zero}, {runner.min_sun_elevation}, {runner.refresh_delay}')
@@ -477,29 +476,31 @@ def get_gps_flags(_):
 def set_tower_stall_flag(n_clicks, _, state):
     trigger = dash.callback_context.triggered[0]['prop_id'].split('.')[1]
     if trigger == 'n_intervals':
+        # Automatic update with time interval
         if runner.indexing_table.stalled and runner.indexing_table.alive:
-            if state == 'mt-2 ml-1 d-none':
-                logger.debug('set_tower_stall_flag: false')
-                return 'mt-2 ml-1'
-            else:
-                raise dash.exceptions.PreventUpdate()
-        else:
-            if state == 'mt-2 ml-1':
+            if state == 'mt-2 ml-1 d-none' or state is None:
                 logger.debug('set_tower_stall_flag: true')
+                return 'mt-2 ml-1'
+            else:
+                raise dash.exceptions.PreventUpdate()
+        else:
+            if state == 'mt-2 ml-1' or state is None:
+                logger.debug('set_tower_stall_flag: false')
                 return 'mt-2 ml-1 d-none'
             else:
                 raise dash.exceptions.PreventUpdate()
-    if trigger == 'n_clicks':
-        if n_clicks:
-            logger.debug('set_tower_stall_flag: reset')
-            runner.indexing_table.reset_stall_flag()
-            return 'mt-2 ml-1 d-none'
+    elif trigger == 'n_clicks' and n_clicks:
+        # User clicked reset button
+        logger.debug('set_tower_stall_flag: reset')
+        runner.indexing_table.reset_stall_flag()
+        return 'mt-2 ml-1 d-none'
+    else:  # trigger is empty and n_clicks is None
+        # Special case of initialization
+        logger.debug('set_tower_stall_flag: loading')
+        if runner.indexing_table.stalled and runner.indexing_table.alive:
+            return 'mt-2 ml-1'
         else:
-            # Special case of initialization
-            if runner.indexing_table.stalled and runner.indexing_table.alive:
-                return 'mt-2 ml-1'
-            else:
-                return 'mt-2 ml-1 d-none'
+            return 'mt-2 ml-1 d-none'
 
 
 @app.callback(Output('tower_orientation', 'value'),

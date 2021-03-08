@@ -121,6 +121,7 @@ class IndexingTable:
                 return False
             self.set_configuration()
             self.alive = True
+            self.get_stall_flag()
             self.get_position()
             return True
 

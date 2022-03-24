@@ -88,6 +88,8 @@ controls_layout = [
                marks={i: '{}°'.format(i) for i in [-160, -80, 0, 80, 160]},
                tooltip={'always_visible': False, 'placement': 'bottom'},
                className='d-none'),  # Hide bar when switch menu
+    # Set Clock Button (manual mode only)
+    dbc.FormGroup([dbc.Button("Synchronize Clock", id="set_clock", outline=True, color='dark', size='sm', className='d-none')]),
 
     # Settings
     html.Div([
@@ -163,6 +165,10 @@ controls_layout = [
                dbc.ModalFooter([dbc.Button("Close", id="device_file_modal_close", className="mr-1")]),
                ],
               id="device_file_modal", is_open=False, backdrop='static', keyboard=False, centered=True),
+    dbc.Modal([dbc.ModalBody("Clock Synchronization", id="set_clock_modal_body"),
+               dbc.ModalFooter([dbc.Button("Close", id="set_clock_modal_close", className="mr-1")]),
+               ],
+              id="set_clock_modal", is_open=False, backdrop='static', keyboard=False, centered=True),
     dbc.Modal([dbc.ModalBody("Are you sure you want to shut down pySAS now ?", id='halt_modal_body'),
                dbc.ModalFooter([dbc.Button("Cancel", id="halt_modal_close", className="mr-1"),
                                 dbc.Button("Shut Down", id="halt_modal_halt", outline=True)]),
@@ -239,6 +245,25 @@ def update_time(_):
     return strftime("%-H:%M:%S", dt), strftime("%b %d, %Y", dt)
 
 
+@app.callback([Output('set_clock_modal_body', 'children'), Output('set_clock_modal', 'is_open')],
+              [Input('set_clock', 'n_clicks'), Input('set_clock_modal_close', 'n_clicks')])
+def set_clock(set_clock_click, close_modal_click):
+    if not set_clock_click and not close_modal_click:
+        raise dash.exceptions.PreventUpdate()
+    trigger = dash.callback_context.triggered[0]['prop_id']
+    if trigger == 'set_clock_modal_close.n_clicks':
+        return '', False
+    pre_sync = strftime("%Y/%m/%d %H:%M:%SZ", gmtime())
+    synchronized = runner.get_time_sync()
+    post_sync = strftime("%Y/%m/%d %H:%M:%SZ", gmtime())
+    if synchronized:
+        msg = f'Synchronize SBS with GPS clock from {pre_sync} to {post_sync}'
+    else:
+        msg = f'Unable to synchronize time, is the GPS on with a valid fix?'
+    logger.debug(msg)
+    return msg, True
+
+
 #################
 # Operation Mode
 @app.callback([Output('tower_switch', 'className'),
@@ -246,7 +271,8 @@ def update_time(_):
                Output('gps_switch', 'className'),
                Output('hypersas_switch', 'className'), Output('hypersas_status', 'className'),
                Output('operation_mode_last_value', 'children'), Output('tower_switch_last_value', 'children'),
-               Output('get_switch_last_n_updates', 'children')],
+               Output('get_switch_last_n_updates', 'children'),
+               Output('set_clock', 'className')],
               [Input('operation_mode', 'value'), Input('tower_switch', 'value')],
               [State('operation_mode_last_value', 'children'), State('tower_switch_last_value', 'children'),
                State('get_switch_n_updates', 'children'), State('get_switch_last_n_updates', 'children')])
@@ -302,12 +328,14 @@ def set_operation_mode(operation_mode, tower_switch, operation_mode_previous, to
     gps_switch_class_name = 'mt-1 ml-1'
     hypersas_switch_class_name = 'mt-1 ml-1'
     hypersas_status_class_name = 'mt-2 ml-1'
+    set_clock_class_name = ''
     if runner.operation_mode == 'auto':
         tower_switch_class_name = 'd-none'
         tower_orientation_class_name = 'd-none'
         tower_zero_class_name = 'd-none'
         gps_switch_class_name = 'd-none'
         hypersas_switch_class_name = 'd-none'
+        set_clock_class_name = 'd-none'
     elif runner.operation_mode == 'manual':
         hypersas_status_class_name = 'd-none'
         # Get Indexing Table Status
@@ -322,7 +350,8 @@ def set_operation_mode(operation_mode, tower_switch, operation_mode_previous, to
         tower_state = []
     # Update UI
     return tower_switch_class_name, tower_orientation_class_name, tower_zero_class_name, gps_switch_class_name, \
-           hypersas_switch_class_name, hypersas_status_class_name, runner.operation_mode, tower_state, get_switch_n_updates
+           hypersas_switch_class_name, hypersas_status_class_name, runner.operation_mode, tower_state,\
+           get_switch_n_updates, set_clock_class_name
 
 
 @app.callback([Output('hypersas_switch', 'value'), Output('gps_switch', 'value'), Output('tower_switch', 'value'),

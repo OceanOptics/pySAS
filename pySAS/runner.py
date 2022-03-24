@@ -215,8 +215,10 @@ class Runner:
             self.time_synced = time()
             self.__logger.info("Time synchronized. From %s to %s" % (strftime('%Y/%m/%d %H:%M:%S', gmtime(pre_sync)),
                                strftime('%Y/%m/%d %H:%M:%S', gmtime(self.time_synced))))
+            return True
         else:
             self.__logger.warning("Unable to synchronize time.")
+            return False
 
     def get_sun_position(self):
         """

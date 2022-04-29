@@ -597,6 +597,7 @@ class GPS(Sensor):
 class HyperOCR(Sensor):
 
     MAX_BUFFER_LENGTH = 16384
+    DATA_TIMEOUT = 60  # seconds
 
     def __init__(self, cfg, data_logger=None, parser=None):
         super().__init__(cfg)
@@ -784,6 +785,7 @@ class HyperOCR(Sensor):
             super().start()
 
     def run(self):
+        data_timeout_flag, data_received = False, None
         while self.alive: # and self._serial.is_open:
             try:
                 data = self._serial.read(self._serial.in_waiting or 1)
@@ -794,9 +796,21 @@ class HyperOCR(Sensor):
                         if len(self._buffer) > self.MAX_BUFFER_LENGTH:
                             self.__logger.error('Buffer exceeded maximum length. Buffer emptied to prevent overflow')
                             self._buffer = bytearray()
+                        data_received = timestamp
+                        if data_timeout_flag:
+                            data_timeout_flag = False
                     except Exception as e:
                         self.__logger.error(e)
                         sleep(1)
+                else:
+                    if data_received is not None and \
+                            timestamp - data_received > self.DATA_TIMEOUT and data_timeout_flag is False:
+                        self.logger.error(f'No data received during the past {timestamp - data_received:.2f} seconds')
+                        data_timeout_flag = True
+                        # Power cycle sensor
+                        self._relay.off()
+                        sleep(1)
+                        self._relay.on()
             except SerialException as e:
                 self.__logger.error(e)
                 self.stop(from_thread=True)

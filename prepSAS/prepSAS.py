@@ -85,7 +85,7 @@ class Converter:
                         # Parse timestamp
                         timestamp = unpack('!ii', b'\x00' + timestamp)
                         try:
-                            ts.append(datetime.strptime(str(timestamp[0]) + str(timestamp[1]) + '000', '%Y%j%H%M%S%f'))
+                            ts.append(datetime.strptime(str(timestamp[0]) + str(timestamp[1]).zfill(9) + '000', '%Y%j%H%M%S%f'))
                             # Shift buffer
                             buffer = buffer[7:]
                         except ValueError:

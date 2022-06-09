@@ -1,52 +1,48 @@
-from pySatlantic.instrument import Instrument as pySat
-from geomag.geomag import GeoMag
-from datetime import datetime, timedelta
-from struct import pack, unpack
-import multiprocessing
-from tqdm import tqdm
-import configparser
-import pandas as pd
-import numpy as np
-import warnings
-import logging
-import pytz
-import glob
+import re
 import os
+import glob
+import logging
+import configparser
+import multiprocessing
+from functools import reduce
+from operator import xor
+from time import time
+from datetime import datetime, timedelta, timezone
+from struct import pack, unpack
+from struct import error as StructError
 
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+from geomag.geomag import GeoMag
+from pySatlantic.instrument import Instrument as pySat
 from pysolar.solartime import leap_seconds_adjustments
-from pysolar.solar import get_azimuth, get_altitude, get_solar_time
+from pysolar.solar import get_azimuth, get_altitude
+
 # pysolar_end_year = 2018  # v0.8
+from tqdm.contrib.logging import logging_redirect_tqdm
+
 pysolar_end_year = 2020  # v0.9
 for y in range(pysolar_end_year, datetime.now().year + 2):
     leap_seconds_adjustments.append((0, 0))
 
-
-__version__ = '0.2.4'
+__version__ = '1.0.0'
+logger = logging.getLogger('prepSAS')
 
 # Load NOAA World Magnetic Model
 WORLD_MAGNETIC_MODEL = GeoMag()
 
 
-def wrap_to_360(angle):
-    new_angle = angle
-    while new_angle < 0:
-        new_angle += 360
-    while new_angle >= 360:
-        new_angle -= 360
-    return new_angle
-
-
 class Converter:
 
     def __init__(self, path_to_cal, path_to_cfg):
-        self.logger = logging.getLogger(self.__class__.__name__)
         self.parser = pySat(path_to_cal)
         cfg = configparser.ConfigParser()
         try:
             if not cfg.read(path_to_cfg):
-                self.logger.critical('Configuration file not found')
+                logger.critical('Configuration file not found')
         except configparser.Error as e:
-            self.logger.critical('Unable to parse configuration file')
+            logger.critical('Unable to parse configuration file')
         self.cfg_compass_zero = cfg.getfloat('AutoPilot', 'gps_orientation_on_ship', fallback=0)
         self.cfg_tower_zero = cfg.getfloat('AutoPilot', 'indexing_table_orientation_on_ship', fallback=0)
         self.cfg_target = cfg.getfloat('AutoPilot', 'optimal_angle_away_from_sun', fallback=135)
@@ -56,112 +52,271 @@ class Converter:
         self._gps_solar, self._twr_solar, self._sat_solar = list(), list(), list()
         self._path_out, self._output_length = '', ''
 
-    def read_sat(self, filename):
-        d, ts = [], []
-        ignored_bytes = 0
-        n_frames = dict()
-        # Read Raw Data (Frames.all)
-        with open(filename, 'rb') as f:
-            self.logger.info(f'Reading {filename}')
-            buffer = f.read()
-            frame = True
-
-            pbar = tqdm(total=len(buffer), unit='bytes') if self.logger.getEffectiveLevel() <= logging.DEBUG else None
-            while frame or unknown_bytes:
-                if pbar:
-                    pbar_buffer_len = len(buffer)
-                # Get Frame
-                frame, frame_header, buffer, unknown_bytes = self.parser.find_frame(buffer)
-                if unknown_bytes:
-                    if unknown_bytes[:6] == b'SATHDR' or unknown_bytes[:5] == b'BEGIN':
-                        self.logger.debug('Skip SatView Header')
-                    else:
-                        self.logger.debug(unknown_bytes)
-                        ignored_bytes += len(unknown_bytes)
-                if frame:
-                    if len(buffer) >= 7:
-                        # Get SatView timestamp
-                        timestamp = buffer[:7]
-                        # Parse timestamp
-                        timestamp = unpack('!ii', b'\x00' + timestamp)
-                        try:
-                            ts.append(datetime.strptime(str(timestamp[0]) + str(timestamp[1]).zfill(9) + '000', '%Y%j%H%M%S%f'))
-                            # Shift buffer
-                            buffer = buffer[7:]
-                        except ValueError:
-                            self.logger.error(f'{filename}: Time Impossible, frame likely corrupted.')
-                            ts.append(float('nan'))
-                    else:
-                        # Missing data to read timestamp from SatView
-                        # Refill buffer and go grab more data
-                        buffer = frame + buffer
-                        break
-                    d.append(frame)
-                    if frame_header not in n_frames.keys():
-                        n_frames[frame_header] = 1
-                    else:
-                        n_frames[frame_header] += 1
-
-                # Update progress bar
-                if pbar:
-                    pbar.update(pbar_buffer_len-len(buffer))
-            if pbar:
-                pbar.close()
-        self.logger.info(f'Frames Found: {n_frames}')
-        self.logger.info(f'Ignored Bytes: {ignored_bytes}')
-        return pd.DataFrame({'timestamp': ts, 'frame': d})
+    def read_sat(self, filenames):
+        """
+        Read Satlantic file(s), much faster than method provided in pySatlantic format
+        Split raw data based on frame header instead of using pySatlantic.instrument.Instrument.find_frame method
+        :param filenames: list of file names to read
+        :param headers:
+        :return:
+        """
+        data = list()
+        with logging_redirect_tqdm():
+            for filename in tqdm(filenames if isinstance(filenames, list) else [filenames], 'Reading SAT'):
+                # tic = time()
+                with open(filename, 'rb') as f:
+                    # logger.debug(f'Reading {filename}')
+                    raw = f.read()
+                if len(raw) == 0:
+                    logger.warning(f'{os.path.basename(filename)}:Empty file.')
+                    continue
+                # logger.debug(f'read in {time()-tic:.3f} s')
+                # Separate frames (too slow when multiple frame headers)
+                # tic = time()
+                # frames = [raw]
+                # for header in parsed_headers:
+                #     tmp = []
+                #     for d in frames:
+                #         data = d.split(header)
+                #         tmp = tmp + [header + data[0] if d.startswith(header) else data[0]] + [header + x for x in data[1:]]
+                #     frames = tmp
+                # logger.debug(f'split in {time() - tic:.3f} s')
+                # Parse Headers
+                # tic = time()
+                # headers = []
+                # n_frames = {}
+                # for frame in frames:
+                #     for header in parsed_headers:
+                #         if frame.startswith(header):
+                #             headers.append(header)
+                #             break
+                #     else:
+                #         # logger.debug(f'HeaderError: {frame}')
+                #         headers.append(None)
+                # logger.debug(f'headers in {time() - tic:.3f} s')
+                # Separate frames with regex
+                # tic = time()
+                frames = re.split(b'(' +  b'|'.join([re.escape(k.encode('ASCII'))
+                                                     for k in self.parser.cal.keys()]) + b')', raw)
+                if len(frames[0]):
+                    logger.warning(f'{os.path.basename(filename)}:ignored first bytes: {frames[0][:1000]}')  # Only display first thousand bytes
+                if len(frames) < 2:
+                    logger.warning(f'{os.path.basename(filename)}:No frames found.')
+                    continue
+                headers = frames[1::2]
+                frames = [h + d for h, d in zip(headers, frames[2::2])]
+                # logger.debug(f'split in {time() - tic:.3f} s')
+                # Remove header frames
+                # tic = time()
+                for i, frame in enumerate(frames):
+                    if frame.startswith(b'SATHDR'):
+                        del frames[i]
+                        del headers[i]
+                # logger.debug(f'sathdr in {time() - tic:.3f} s')
+                # Parse Time
+                # tic = time()
+                d, t = np.empty(len(frames), dtype=int), np.empty(len(frames), dtype=int)
+                for i, frame in enumerate(frames):
+                    try:
+                        d[i], t[i] = unpack('!ii', b'\x00' + frame[-7:])
+                        frames[i] = frame[:-7]  # Remove timestamp from frame
+                    except (StructError):
+                        # logger.debug(f'TimeError: {frame}')
+                        d[i], t[i] = 0, 0
+                df = pd.DataFrame({'d': d, 't': t})
+                df['dt'] = df.d.astype(str) + df.t.astype(str).apply(lambda y: y.zfill(9)) + '000'
+                timestamps = pd.to_datetime(df['dt'], format='%Y%j%H%M%S%f', utc=True, errors='coerce')
+                timestamps[(timestamps < datetime(2020, 1, 1, tzinfo=timezone.utc)) |
+                           (datetime.utcnow().astimezone(timezone.utc) < timestamps)] = pd.NaT
+                # logger.debug(f'timestamp in {time() - tic:.3f} s')
+                data.append(pd.DataFrame({'timestamp': timestamps, 'header': headers, 'frame': frames}))
+        if not data:
+            logger.warning('No valid Satlantic data.')
+            return
+        return pd.concat(data, ignore_index=True).dropna()
 
     @staticmethod
-    def make_gprmc(row):
-        hhmmss = row.gps_datetime.strftime('%H%M%S')
-        valid = 'A' if row.datetime_valid and row.fix_ok else 'V'
-        lat_dd = np.floor(abs(row.latitude))
-        lat_mm = (abs(row.latitude) - lat_dd) * 60
-        lat_hm = 'S' if row.latitude < 0 else 'N'
-        lon_ddd = np.floor(abs(row.longitude))
-        lon_mm = (abs(row.longitude) - lon_ddd) * 60
-        lon_hm = 'W' if row.longitude < 0 else 'E'
-        speed = row.speed * 1.94384  # Convert from m/s to knots
-        course = row.heading_motion
-        ddmmyy = row.gps_datetime.strftime('%d%m%y')
-        mag_var = WORLD_MAGNETIC_MODEL.GeoMag(row.latitude, row.longitude, row.altitude * 3.2808399, row.gps_datetime.date()).dec
-        mag_var_hm = 'W' if mag_var < 0 else 'E'
-        frame = f'$GPRMC,{hhmmss},{valid},{int(lat_dd):02d}{lat_mm:07.4f},{lat_hm},' \
-                f'{int(lon_ddd):02d}{lon_mm:07.4f},{lon_hm},{speed:05.1f},{course:05.1f},' \
-                f'{ddmmyy},{abs(mag_var):05.1f},{mag_var_hm}'
-        checksum = 0
-        for s in frame[1:]:
-            checksum ^= ord(s)
-        return bytes(f'{frame}*{hex(checksum)[2:]}\r\n', 'ascii')
+    def read_gps(filename):
+        """
+        Read pySAS GPS file(s)
+        :param filename: list of filename(s) to read
+        :return:
+        """
+        data = list()
+        with logging_redirect_tqdm():
+            for f in tqdm(filename if isinstance(filename, list) else [filename], 'Reading GPS'):
+                # logger.info(f'Reading {f}')
+                try:
+                    data.append(pd.read_csv(f, skiprows=[1], skipinitialspace=True, na_values=['None'],
+                                            parse_dates=[0, 1], infer_datetime_format=True))
+                except pd.errors.EmptyDataError:
+                    logger.warning(f'Empty GPS file {f}')
+                except ValueError:
+                    logger.warning(f'Invalid GPS file {f}')
+        if not data:
+            logger.warning('No valid GPS data.')
+            return
+        data = pd.concat(data, ignore_index=True)\
+            .dropna(how='all').dropna(subset=['datetime', 'gps_datetime'])\
+            .reset_index(drop=True)
+        data.datetime = data.datetime.dt.tz_localize('UTC')
+        data.gps_datetime = data.gps_datetime.dt.tz_localize('UTC')
+        data.datetime_valid = data.datetime_valid.astype(bool)
+        data.heading_valid = data.heading_valid.astype(bool)
+        data.heading_vehicle_valid = data.heading_vehicle_valid.astype(bool)
+        data.fix_ok = data.fix_ok.astype(bool)
+        return data
 
-    def make_umtwr(self, gps, tower):
+    @staticmethod
+    def read_twr(filename):
+        """
+        Read pySAS Tower/Indexing Table file(s)
+        :param filename: list of filename(s) to read
+        :return:
+        """
+        data = list()
+        with logging_redirect_tqdm():
+            for f in tqdm(filename if type(filename) is list else [filename], 'Reading TWR'):
+                # logger.debug(f'Reading {f}')
+                try:
+                    data.append(pd.read_csv(f, skiprows=[1], skipinitialspace=True, na_values=['None'],
+                                            parse_dates=[0], infer_datetime_format=True))
+                except pd.errors.EmptyDataError:
+                    logger.warning(f'Empty indexing table file {f}')
+                    continue
+                except ValueError:
+                    logger.warning(f'Invalid indexing table file {f}')
+        if not data:
+            logger.warning('No valid indexing table file')
+            return
+        data = pd.concat(data, ignore_index=True).dropna(how='all').dropna(subset=['datetime'])
+        # Propagate stall flag and drop empty lines
+        data.stall_flag = data.stall_flag.fillna(method='ffill', limit=20)
+        data.stall_flag = data.stall_flag.fillna(method='bfill', limit=3)
+        data = data.dropna(subset=['position', 'stall_flag']).reset_index(drop=True)
+        data.stall_flag = data.stall_flag.astype(bool)
+        data.datetime = data.datetime.dt.tz_localize('UTC')
+        return data
+
+    @staticmethod
+    def make_gprmc(df, compute_magnetic_declination=True):
+        """
+        Make $GPRMC NMEA frames to be ingested by HyperInSPACE
+        :param df: gps data frame
+        :param compute_magnetic_declination: Enable computation of magnetic declination (very slow)
+        :return:
+        """
+        logger.debug('Making $GPRMC frames ...')
+        hhmmss = df.gps_datetime.dt.strftime('%H%M%S')
+        valid = pd.Series(['V'] * len(df))
+        valid[df.datetime_valid & df.fix_ok] = 'A'
+        lat_dd = np.floor(np.abs(df.latitude))
+        lat_mm = ((np.abs(df.latitude) - lat_dd) * 60).apply(lambda x: f'{x:07.4f}')
+        lat_dd = lat_dd.apply(lambda x: f'{x:02.0f}')
+        lat_hm = pd.Series(['N'] * len(df))
+        lat_hm[df.latitude < 0] = 'S'
+        lon_ddd = np.floor(np.abs(df.longitude))
+        lon_mm = ((np.abs(df.longitude) - lon_ddd) * 60).apply(lambda x: f'{x:07.4f}')
+        lon_ddd = lon_ddd.apply(lambda x: f'{x:03.0f}')
+        lon_hm = pd.Series(['E'] * len(df))
+        lon_hm[df.longitude < 0] = 'W'
+        speed = (df.speed * 1.94384).apply(lambda x: f'{x:05.1f}')  # Convert from m/s to knots
+        course = (df.heading_motion).apply(lambda x: f'{x:05.1f}')
+        ddmmyy = df.gps_datetime.dt.strftime('%d%m%y')
+        if compute_magnetic_declination:
+            # vgeomag = np.vectorize(WORLD_MAGNETIC_MODEL.GeoMag)
+            # vgeomag(df.latitude, df.longitude, df.altitude * 3.2808399, df.gps_datetime.dt.date)
+            mag_var = df.apply(lambda row: WORLD_MAGNETIC_MODEL.GeoMag(
+                row.latitude, row.longitude, row.altitude * 3.2808399, row.gps_datetime.date()).dec, axis='columns')
+            mag_var_hm = pd.Series(['E'] * len(df))
+            mag_var_hm[mag_var < 0] = 'W'
+            mag_var = np.abs(mag_var).apply(lambda x: f'{x:05.1f}')
+        else:
+            row = df.loc[0]
+            mag_var = WORLD_MAGNETIC_MODEL.GeoMag(row.latitude, row.longitude,
+                                                  row.altitude * 3.2808399, row.gps_datetime.date()).dec
+            mag_var_hm = pd.Series(['W' if mag_var < 0 else 'E'] * len(df))
+            mag_var = pd.Series([f'{abs(mag_var):05.1f}'] * len(df))
+        frame = pd.Series(['$GPRMC'] * len(df)) + ',' + hhmmss + ',' + valid + ',' + \
+                lat_dd + lat_mm + ',' + lat_hm + ',' + lon_ddd + lon_mm + ',' + lon_hm + ',' + \
+                speed + ',' + course + ',' + ddmmyy + ',' + mag_var + ',' + mag_var_hm
+        checksum = frame.apply(lambda frame: f'*{hex(reduce(xor, map(ord, frame[1:])))[2:]}\r\n')
+        return pd.DataFrame({'timestamp': df.datetime.to_numpy(),
+                             'frame': (frame + checksum).str.encode('ascii')})
+
+    def make_umtwr(self, gps, tower, parallel=True, sun_pos_rule='30S'):
+        """
+        Make University of Maine Tower/Indexing Table frames
+
+        :param gps: gps data frame
+        :param tower: tower data frame
+        :param parallel: use all cores available to compute sun position
+        :param sun_pos_rule: increase speed
+        :return:
+        """
+        logger.debug('Making UMTWR frames ...')
         # Build sampling index
-        # gps_idx = pd.DataFrame({'source': ['gps']*len(gps)}, index=gps.index)
-        idx = pd.concat([pd.DataFrame({'datetime': gps.datetime, 'source': ['gps']*len(gps)}, index=gps.index),
-                         pd.DataFrame({'datetime': tower.datetime, 'source': ['twr']*len(tower)}, index=tower.index)])
+        idx = pd.concat([pd.DataFrame({'datetime': gps.datetime, 'source': ['gps'] * len(gps), 'ig': gps.index}),
+                         pd.DataFrame({'datetime': tower.datetime, 'source': ['twr'] * len(tower), 'it': tower.index})],
+                        ignore_index=True)
         idx = idx.sort_values(by='datetime')
+        idx.ig = idx.ig.fillna(method='ffill', limit=15)
+        idx.it = idx.it.fillna(method='ffill')
+        idx.dropna(inplace=True)
+        idx.ig = idx.ig.astype(int, copy=False)
+        idx.it = idx.it.astype(int, copy=False)
+        # Compute sun elevation
+        global sun_position
+
+        def sun_position(args):
+            # args = lat, lon, dt_utc, altitude
+            return f'{get_azimuth(*args):05.1f}', f'{get_altitude(*args):04.1f}'
+
+        # Down-sample input as sun position change slowly compared to sampling rate
+        sun = gps.loc[gps.fix_ok & gps.datetime_valid, ['latitude', 'longitude', 'gps_datetime', 'altitude']]
+        sun = sun.reset_index().set_index('gps_datetime', drop=False).resample(sun_pos_rule).agg('first').dropna()
+        sun['index'] = sun['index'].astype(int)
+        if parallel:
+            sun_list = list(sun.reindex(columns=['latitude', 'longitude', 'gps_datetime', 'altitude'])
+                            .itertuples(name=None, index=False))
+            with multiprocessing.Pool() as pool:
+                sun['azimuth'], sun['elevation'] = zip(*tqdm(pool.imap(sun_position, sun_list),
+                                                             'Computing SunPos', total=len(sun_list)))
+        else:
+            sun['azimuth'], sun['elevation'] = '', ''
+            for i, row in tqdm(sun.iterrows(), 'Computing SunPos', total=len(sun)):
+                sun.loc[i, 'azimuth'], sun.loc[i, 'elevation'] = \
+                    sun_position((row.latitude, row.longitude, row.gps_datetime, row.altitude))
+        sun.set_index('index', inplace=True)
+        m_sun = pd.DataFrame(index=idx.ig)
+        m_sun['azimuth'], m_sun['elevation'] = sun['azimuth'], sun['elevation']
+        m_sun.azimuth = m_sun.azimuth.fillna(method='ffill')
+        m_sun.elevation = m_sun.elevation.fillna(method='ffill')
+        m_sun.loc[~(gps.fix_ok[idx.ig] & gps.datetime_valid[idx.ig]), ['azimuth', 'elevation']] = 'NAN'
         # Build frames
-        d = list()
-        ig, it = gps.index[0], tower.index[0]
-        for k in range(len(idx)):
-            if idx.source.iloc[k] == 'gps':
-                ig = idx.index[k]
-            else:  # idx.source.iloc[k] == 'twr'
-                it = idx.index[k]
-            heading_ship = wrap_to_360(gps.heading[ig] - self.cfg_compass_zero)
-            heading_sas = wrap_to_360(heading_ship - self.cfg_tower_zero + tower.position[it])
-            tower_status = 'S' if tower.stall_flag[it] else 'O'
-            dt_utc = gps.gps_datetime[ig].replace(tzinfo=pytz.utc).to_pydatetime()
-            sun_azimuth = get_azimuth(gps.latitude[ig], gps.longitude[ig], dt_utc, gps.altitude[ig])
-            sun_elevation = get_altitude(gps.latitude[ig], gps.longitude[ig], dt_utc, gps.altitude[ig])
-            frame = f'UMTWR,{heading_sas:03.2f},{heading_ship:06.2f},{gps.heading_accuracy[ig]:06.2f},' \
-                    f'{gps.heading_motion[ig]:05.1f},{gps.heading_vehicle_accuracy[ig]:05.1f},' \
-                    f'{tower.position[it]:06.2f},{tower_status},{sun_azimuth:05.1f},{sun_elevation:04.1f}\r\n'
-            d.append(bytes(frame, 'ascii'))
+        heading_ship = ((gps.heading[idx.ig] - self.cfg_compass_zero) % 360).reset_index(drop=True)
+        heading_sas = ((heading_ship - self.cfg_tower_zero + tower.position[idx.it].reset_index(drop=True)) % 360).apply(lambda x: f'{x:.2f}')
+        heading_ship = heading_ship.apply(lambda x: f'{x:.2f}')
+        heading_accuracy = gps.heading_accuracy[idx.ig].apply(lambda x: f'{x:.2f}').reset_index(drop=True)
+        heading_motion = gps.heading_motion[idx.ig].apply(lambda x: f'{x:.1f}').reset_index(drop=True)
+        heading_vehicle_accuracy = gps.heading_vehicle_accuracy[idx.ig].apply(lambda x: f'{x:.1f}').reset_index(drop=True)
+        position = tower.position[idx.it].apply(lambda x: f'{x:.2f}').reset_index(drop=True)
+        tower_status = pd.Series(['O'] * len(idx))
+        tower_status[tower.stall_flag[idx.it].to_numpy()] = 'S'
+        m_sun.reset_index(drop=True, inplace=True)
+        frame = 'UMTWR,' + heading_sas + ',' + heading_ship + ',' + heading_accuracy + ',' + \
+                heading_motion + ',' + heading_vehicle_accuracy + ',' + \
+                position + ',' + tower_status + ',' + m_sun.azimuth + ',' + m_sun.elevation + '\r\n'
+        return pd.DataFrame({'timestamp': idx.datetime.to_numpy(),
+                             'frame': frame.str.encode('ascii')})
 
-        return pd.DataFrame({'timestamp': idx.datetime.to_numpy(), 'frame': d})
-
-    def make_sathdr(self, values=dict()):
+    @staticmethod
+    def make_sathdr(values=dict()):
+        """
+        Make Satlantic File Header
+        :param values: dictionary of headers
+        :return:
+        """
         keys = [b'CRUISE-ID', b'OPERATOR', b'INVESTIGATOR', b'AFFILIATION', b'CONTACT', b'EXPERIMENT',
                 b'LATITUDE', b'LONGITUDE', b'ZONE', b'CLOUD_PERCENT', b'WAVE_HEIGHT', b'WIND_SPEED', b'COMMENT',
                 b'DOCUMENT', b'STATION-ID', b'CAST', b'TIME-STAMP', b'MODE', b'TIMETAG', b'DATETAG', b'TIMETAG2',
@@ -171,193 +326,102 @@ class Converter:
             v = values[k] if k in values.keys() else b''
             sentence = b'SATHDR ' + v + b' (' + k + b')\r\n'
             if len(sentence) > 128:
-                self.logger.warning(f'SATHDR {k} too long')
+                logger.warning(f'SATHDR {k} too long')
             sentence += b'\x00' * (128 - len(sentence))
             header += sentence
         return header
 
-    def run(self, filename_sat, filename_gps, filename_tower, filename_output, output_length='all'):
+    def write(self, data, filename, meta=dict()):
         """
+        Write HyperInSPACE formatted data
 
-        :param filename_sat:
-        :param filename_gps:
-        :param filename_tower:
-        :param filename_output:
-        :param output_length: Length of output file options are 'all' or 'hour'
+        :param data: data frame to write
+        :param filename: output file name to write to
+        :param meta: metadata to append to Satlantic file header
         :return:
         """
-        # Read raw with system timestamp
-        sat = list()
-        for f in filename_sat if type(filename_sat) is list else [filename_sat]:
-            sat.append(self.read_sat(f))
-        if not sat:
-            self.logger.warning('No valid Satlantic file')
-            return
-        sat = pd.concat(sat, ignore_index=True).dropna()
-
-        # Read GPS and Tower
-        self.logger.debug('Reading GPS and Tower files')
-        gps = list()
-        for f in filename_gps if type(filename_gps) is list else [filename_gps]:
-            try:
-                gps.append(pd.read_csv(f, skiprows=[1], skipinitialspace=True, na_values=['None'],
-                                       parse_dates=[0,1], infer_datetime_format=True))
-            except pd.errors.EmptyDataError:
-                self.logger.warning(f'Empty GPS file {f}')
-            except ValueError:
-                self.logger.warning(f'Invalid GPS file {f}')
-        if not gps:
-            self.logger.warning('No valid GPS file')
-            return
-        gps = pd.concat(gps, ignore_index=True).dropna(how='all').dropna(subset=['datetime', 'gps_datetime'])
-        twr = list()
-        for f in filename_tower if type(filename_tower) is list else [filename_tower]:
-            try:
-                twr.append(pd.read_csv(f, skiprows=[1], skipinitialspace=True, na_values=['None'],
-                                       parse_dates=[0], infer_datetime_format=True))
-            except pd.errors.EmptyDataError:
-                self.logger.warning(f'Empty indexing table file {f}')
-                continue
-            except ValueError:
-                self.logger.warning(f'Invalid indexing table file {f}')
-        if not twr:
-            self.logger.warning('No valid indexing table file')
-            return
-        twr = pd.concat(twr, ignore_index=True).dropna(how='all').dropna(subset=['datetime'])
-        stall_flag = twr.stall_flag[0]
-        for k in twr.index:
-            if np.isnan(twr.stall_flag[k]):
-                twr.loc[k, 'stall_flag'] = stall_flag
-            else:
-                stall_flag = twr.stall_flag[k]
-        twr.loc[pd.isna(twr.stall_flag), 'stall_flag'] = False
-        twr = twr.loc[(~np.isnan(twr.position)), :]
-
-        # Make new frames
-        self.logger.info('Converting GPS and Tower frames to Satlantic format')
-        gprmc = pd.DataFrame({'timestamp': gps.datetime.to_numpy(), 'frame': gps.apply(self.make_gprmc, axis='columns').to_numpy()})
-        umtwr = self.make_umtwr(gps, twr)
-
-        # Interpolate frames
-        all = pd.concat([sat, gprmc, umtwr]).sort_values(by=['timestamp'], ignore_index=True)
-
-        # Make SATHDR
-        hdr = self.make_sathdr({b'LATITUDE': bytes(f'{gps.latitude.min()}:{gps.latitude.max()}', 'ascii'),
-                                b'LONGITUDE': bytes(f'{gps.longitude.min()}:{gps.longitude.max()}', 'ascii'),
-                                b'ZONE': b'UTC',
-                                b'COMMENT': bytes(f'gps_orientation_on_ship={self.cfg_compass_zero};'
-                                                  f'indexing_table_orientation_on_ship={self.cfg_tower_zero};'
-                                                  f'optimal_angle_away_from_sun={self.cfg_target};', 'ascii'),
-                                b'TIME-STAMP': bytes(sat.timestamp.min().strftime('%a %b %d %H:%M:%S %Y'), 'ascii')})
-
+        # Make satlantic file header
+        header = {b'ZONE': b'UTC',
+               b'COMMENT': bytes(f'gps_orientation_on_ship={self.cfg_compass_zero};'
+                                 f'indexing_table_orientation_on_ship={self.cfg_tower_zero};'
+                                 f'optimal_angle_away_from_sun={self.cfg_target};', 'ascii')}
+        min_ts = data.timestamp.min()
+        if not pd.isna(min_ts):
+            header[b'TIME-STAMP'] = bytes(min_ts.strftime('%a %b %d %H:%M:%S %Y'), 'ascii')
+        if 'll_lat' in meta.keys() and 'ur_lat' in meta.keys():
+            header[b'LATITUDE'] = bytes(f"{meta['ll_lat']}:{meta['ur_lat']}", 'ascii')
+        if 'll_lon' in meta.keys() and 'ur_lon' in meta.keys():
+            header[b'LONGITUDE'] = bytes(f"{meta['ll_lon']}:{meta['ur_lon']}", 'ascii')
+        header = self.make_sathdr(header)
+        # Format data
+        body = b''.join([f + pack('!ii', d, t) for f, d, t in zip(
+            data.frame,
+            data.timestamp.dt.strftime('%Y%j').astype(int).to_list(),
+            data.timestamp.dt.strftime('%H%M%S%f').str[:-3].astype(int).to_list()
+        )])
         # Write to file
-        if output_length == 'all':
-            all_sel = [[True] * len(all)]
-            filenames = [filename_output]
-        elif output_length == 'hour':
-            all_sel, filenames = list(), list()
-            path, ext = os.path.splitext(filename_output)
-            ts = all.timestamp[0]
-            while ts < all.timestamp.max():
-                sel = (ts <= all.timestamp) & (all.timestamp < ts + timedelta(hours=1))
-                if any(sel):
-                    all_sel.append(sel)
-                    filenames.append(f"{path}_{ts.strftime('%H%M%S')}{ext}")
-                ts += timedelta(hours=1)
-        for filename, sel in zip(filenames, all_sel):
-            self.logger.info(f'Writing {filename}')
-            with open(filename, mode='wb') as f:
-                f.write(hdr)
-                for k in all.index[sel]:
-                    f.write(all.frame[k])
-                    timestamp = pack('!ii', int(all.timestamp[k].strftime('%Y%j')),
-                                            int(all.timestamp[k].strftime('%H%M%S%f')[:-3]))[1:]
-                    f.write(timestamp)
+        with open(filename, mode='wb') as f:
+            logger.debug(f'Writing {os.path.basename(filename)}')
+            f.write(header)
+            f.write(body)
 
-    def run_dir(self, path_in, path_out, file_out_prefix='pySAS_', mode='day', parallel=True):
+    def run(self, path_in, path_out, file_out_prefix='pySAS_', mode='day', parallel=True,
+            meta={}, compute_magnetic_declination=False):
         """
-        Convert pySAS output located in one directory to Satlantic files.
-        Can either process all files at once (mode='all') or files day by day (mode='day').
+        Convert pySAS output to Satlantic formatted files for HyperInSPACE.
+        Output files can be written by hours or days.
+        Use UTC time to prepare files (no more solar time).
 
-        Does not handle files overlapping on two days (passing midnight solar time)
         :param path_in: path to directory containing pySAS output (gps, indexing table, and satlantic files).
-        :param path_out: path to directory (if mode='day'|'hour') or file (if mode='all') to write assembled data file (.raw).
-        :param mode: process all files of directory at once ('all') or process data files by day ('day') or by hour ('hour'). Use mean solar time (MSR) as time zone.
-        :param parallel: if mode is day or hour then process days present in directory in parallel (default: True).
-        return: None
+        :param path_out: path to directory to write formatted data file (.raw).
+        :param file_out_prefix: appended to each output file name
+        :param mode: process data files by day ('day') or by hour ('hour'). Use UTC as timezone.
+        :param parallel: compute sun position with all cores of computer
+        :param meta: metadata to append to Satlantic file header
+        :param compute_magnetic_declination: computationally intense. HyperInSPACE doesn't use it, so it can be skipped.
+        :return:
         """
-
-        # List all files and get timestamp
-        self._gps_files = sorted(glob.glob(os.path.join(path_in, 'GPS_*.csv')))
-        self._twr_files = sorted(glob.glob(os.path.join(path_in, 'IndexingTable_*.csv')))
-        self._sat_files = sorted(glob.glob(os.path.join(path_in, 'HyperSAS_*.bin')))
-
-        # Process all files in directory at once
-        if mode == 'all':
-            self.run(self._sat_files, self._gps_files, self._twr_files,
-                     f'{path_out[:-1] if path_out.endswith(os.sep) else path_out}.raw')
+        # Read all data
+        sat = self.read_sat(sorted(glob.glob(os.path.join(path_in, 'HyperSAS_*.bin'))))
+        if sat is None:
             return
-
-        # Read all longitude available in directory
-        pos = list()
-        for f in self._gps_files:
-            try:
-                pos.append(pd.read_csv(f, skiprows=[1], skipinitialspace=True, usecols=['datetime', 'longitude'],
-                                       parse_dates=[0, 1], infer_datetime_format=True))
-            except pd.errors.EmptyDataError:
-                self.logger.warning(f'Empty GPS file {f}')
-            except ValueError:
-                self.logger.warning(f'Invalid GPS file {f}')
-        if not pos:
-            self.logger.warning('No valid GPS file')
+        gps = self.read_gps(sorted(glob.glob(os.path.join(path_in, 'GPS_*.csv'))))
+        if gps is None:
             return
-        pos = pd.concat(pos, ignore_index=True)
-        pos = pos.loc[~pd.isnull(pos.datetime)]
-        pos['timestamp'] = pos.datetime.apply(lambda row: row.timestamp()).to_numpy()
-
-        # Get date and time of each file (UTC)
-        gps_dt = np.array([datetime.strptime(os.path.basename(f) + '+0000', 'GPS_%Y%m%d_%H%M%S.csv%z') for f in self._gps_files])
-        twr_dt = np.array([datetime.strptime(os.path.basename(f) + '+0000', 'IndexingTable_%Y%m%d_%H%M%S.csv%z') for f in self._twr_files])
-        sat_dt = np.array([datetime.strptime(os.path.basename(f) + '+0000', 'HyperSAS_%Y%m%d_%H%M%S.bin%z') for f in self._sat_files])
-
-        # Compute solar time of each file
-        # NOTE: Longitude must be between -180 and +180 (it's the case with the ardusimple gps output used in pySAS)
-        warnings.filterwarnings('ignore', category=DeprecationWarning)  # Warning issued by pysolar library using numpy
-        vts = np.vectorize(datetime.timestamp)
-        gps_solar = get_solar_time(np.interp(vts(gps_dt), pos.timestamp, pos.longitude.to_numpy(dtype=np.float)), gps_dt)  # Only hour
-        self._gps_solar = np.array([d.date() + timedelta(hours=t) for d, t in zip(gps_dt, gps_solar)])                     # Complete date time
-        twr_solar = get_solar_time(np.interp(vts(twr_dt), pos.timestamp, pos.longitude.to_numpy(dtype=np.float)), twr_dt)
-        self._twr_solar = np.array([d.date() + timedelta(hours=t) for d, t in zip(twr_dt, twr_solar)])
-        sat_solar = get_solar_time(np.interp(vts(sat_dt), pos.timestamp, pos.longitude.to_numpy(dtype=np.float)), sat_dt)
-        self._sat_solar = np.array([d.date() + timedelta(hours=t) for d, t in zip(sat_dt, sat_solar)])
-        warnings.simplefilter('default', category=DeprecationWarning)
-
-        # Process all files of a single day
-        self._path_out = os.path.join(path_out, file_out_prefix)
-        self._output_length = 'hour' if mode == 'hour' else 'all'
-        if parallel:
-            with multiprocessing.Pool() as pool:
-                pool.map(self._run_day, np.unique(self._sat_solar).tolist())
+        twr = self.read_twr(sorted(glob.glob(os.path.join(path_in, 'IndexingTable_*.csv'))))
+        if twr is None:
+            return
+        # Make HyperInSPACE specific frames
+        gprmc = self.make_gprmc(gps, compute_magnetic_declination=compute_magnetic_declination)
+        umtwr = self.make_umtwr(gps, twr, parallel=parallel)
+        # Concatenate into single dataframe
+        df = pd.concat([sat, gprmc, umtwr]).sort_values(by=['timestamp'], ignore_index=True)
+        # Write data
+        if mode in ['day', 'daily']:
+            dt_start = df.timestamp.min().replace(hour=0, minute=0, second=0, microsecond=0)
+            dt_end = df.timestamp.max() + timedelta(seconds=1)
+            window = timedelta(days=1)
+            dt_format = '%Y%m%d'
+        elif mode in ['hour', 'hourly']:
+            dt_start = df.timestamp.min().replace(minute=0, second=0, microsecond=0)
+            dt_end = df.timestamp.max() + timedelta(seconds=1)
+            window = timedelta(hours=1)
+            dt_format = '%Y%m%d_%H%M%S'
         else:
-            for d in np.unique(self._sat_solar):
-                self._run_day(d)
-
-    def _run_day(self, d):
-        gps_sel = self._gps_solar == d
-        if not np.any(gps_sel):
-            self.logger.warning(f'No GPS file on {d}')
-            return
-        twr_sel = self._twr_solar == d
-        if not np.any(twr_sel):
-            self.logger.warning(f'No IndexingTable file on {d}')
-            return
-        sat_sel = self._sat_solar == d
-        self.logger.debug(f'Converting day {d}')
-        self.run([f for f, sel in zip(self._sat_files, sat_sel) if sel],
-                 [f for f, sel in zip(self._gps_files, gps_sel) if sel],
-                 [f for f, sel in zip(self._twr_files, twr_sel) if sel],
-                 f'{self._path_out}{d.strftime("%Y%m%d")}.raw',
-                 output_length=self._output_length)
+            raise ValueError('writing mode not supported')
+        if not os.path.exists(path_out):
+            os.mkdir(path_out)
+        dt = dt_start
+        while dt < dt_end:
+            sel = (dt <= gps.datetime) & (gps.datetime < dt + window)
+            if sel.any():
+                meta = {**meta,
+                        'll_lat': gps.latitude[sel].min(), 'ur_lat': gps.latitude[sel].max(),
+                        'll_lon': gps.longitude[sel].min(), 'ur_lon': gps.longitude[sel].max()}
+            sel = (dt <= df.timestamp) & (df.timestamp < dt + window)
+            if sel.any():
+                self.write(df[sel], os.path.join(path_out, f'{file_out_prefix}{dt.strftime(dt_format)}.raw'), meta)
+            dt += window
 
 
 if __name__ == '__main__':
@@ -368,15 +432,13 @@ if __name__ == '__main__':
     parser.add_argument('-v', '--version', action='version', version=f'{__file__} v{__version__}')
     parser.add_argument('--cal', nargs='?', required=True, help="HyperSAS & Es calibration files (.sip)")
     parser.add_argument('--cfg', nargs='?', required=True, help="pySAS configuration file (.ini).")
-    parser.add_argument('-s', '--sat', nargs='?', help="path to HyperSAS & Es (.bin) file to process")
-    parser.add_argument('-g', '--gps', nargs='?', help="path to GPS file needed to process HyperSAS file")
-    parser.add_argument('-t', '--tower', nargs='?', help="path to Indexing Table file needed to process HyperSAS file")
-    parser.add_argument('-d', '--directory', nargs='?', help="path to directory of files to process")
-    parser.add_argument('-m', '--mode', choices=['all', 'day'], help="process all files in directory (all) or process files day by day (default: day), only applicable when converting from directory")
+    parser.add_argument('-d', '--directory', required=True, nargs='?', help="path to directory of files to process")
+    parser.add_argument('-m', '--mode', choices=['day', 'hour'],
+                        help="process files day by day (default: day)")
     parser.add_argument('-f', '--file_out_prefix', nargs='?', help="prefix of output file when process directory")
     parser.add_argument('-e', '--experiment', nargs='?', help="SeaBASS name of experiment")
     parser.add_argument('-c', '--cruise', nargs='?', help="SeaBASS name of cruise")
-    parser.add_argument('out', help="path to directory or filename of converted data.")
+    parser.add_argument('out', required=True, help="path to directory or filename of converted data.")
 
     args = parser.parse_args()
 
@@ -384,13 +446,12 @@ if __name__ == '__main__':
     logging.debug(args)
 
     c = Converter(args.cal, args.cfg)
-    if args.directory:
+
+    if args.file_out_prefix:
+        file_out_prefix = args.file_out_prefix
+    else:
         file_out_prefix = args.experiment if args.experiment is not None else ''
         file_out_prefix += '_' + args.cruise if args.cruise is not None else ''
-        args.file_out_prefix = file_out_prefix + '_' if file_out_prefix else args.file_out_prefix
-        kwargs = {'file_out_prefix': args.file_out_prefix} if args.file_out_prefix is not None else {}
-        c.run_dir(args.directory, args.out, mode=args.mode, **kwargs)
-    elif args.sat and args.gps and args.tower:
-        c.run(args.sat, args.gps, args.tower, args.out)
-    else:
-        print(f"{__name__}: error: the following arguments are required: (--sat, --gps, and --tower) or (--directory)")
+    if file_out_prefix:
+        kwargs = {'file_out_prefix': args.file_out_prefix + '_'}
+    c.run(args.directory, args.out, mode=args.mode, **kwargs)

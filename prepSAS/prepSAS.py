@@ -354,7 +354,7 @@ class Converter:
             header[b'LONGITUDE'] = bytes(f"{meta['ll_lon']}:{meta['ur_lon']}", 'ascii')
         header = self.make_sathdr(header)
         # Format data
-        body = b''.join([f + pack('!ii', d, t) for f, d, t in zip(
+        body = b''.join([f + pack('!ii', d, t)[1:] for f, d, t in zip(
             data.frame,
             data.timestamp.dt.strftime('%Y%j').astype(int).to_list(),
             data.timestamp.dt.strftime('%H%M%S%f').str[:-3].astype(int).to_list()

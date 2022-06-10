@@ -19,9 +19,7 @@ PATH_OUT = os.path.join(PATH_DATA,'L0B_hourly.v1')
 experiment='EXPORTS'
 cruise='EXPORTSNA'
 
-## Build object using cals and config
-c = Converter(PATH_CAL, PATH_CFG)
-
 tic = time()
+c = Converter(PATH_CAL, PATH_CFG)
 c.run(PATH_IN, PATH_OUT, mode='hour', file_out_prefix=f'{experiment}_{cruise}_')
 print(f'Run Time: {time() - tic} seconds')

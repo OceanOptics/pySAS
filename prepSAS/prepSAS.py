@@ -242,7 +242,6 @@ class Converter:
         idx.dropna(inplace=True)
         idx.ig = idx.ig.astype(int, copy=False)
         idx.it = idx.it.astype(int, copy=False)
-
         # Down-sample input as sun position change slowly compared to sampling rate
         sun = gps.loc[gps.fix_ok & gps.datetime_valid, ['latitude', 'longitude', 'gps_datetime', 'altitude']]
         sun = sun.reset_index().set_index('gps_datetime', drop=False).resample(sun_pos_rule).agg('first').dropna()
@@ -250,6 +249,7 @@ class Converter:
         if parallel:
             sun_list = list(sun.reindex(columns=['latitude', 'longitude', 'gps_datetime', 'altitude'])
                             .itertuples(name=None, index=False))
+            sun_list[:] = [(a, b, c.to_pydatetime(), d) for a, b, c, d in sun_list]
             with multiprocessing.Pool() as pool:
                 sun['azimuth'], sun['elevation'] = zip(*tqdm(pool.imap(sun_position, sun_list),
                                                              'Computing SunPos', total=len(sun_list)))

@@ -26,11 +26,16 @@ pysolar_end_year = 2020  # v0.9
 for y in range(pysolar_end_year, datetime.now().year + 2):
     leap_seconds_adjustments.append((0, 0))
 
-__version__ = '1.0.0'
+__version__ = '1.0.1'
 logger = logging.getLogger('prepSAS')
 
 # Load NOAA World Magnetic Model
 WORLD_MAGNETIC_MODEL = GeoMag()
+
+
+def sun_position(args):
+    # args = lat, lon, dt_utc, altitude
+    return f'{get_azimuth(*args):05.1f}', f'{get_altitude(*args):04.1f}'
 
 
 class Converter:
@@ -46,11 +51,6 @@ class Converter:
         self.cfg_compass_zero = cfg.getfloat('AutoPilot', 'gps_orientation_on_ship', fallback=0)
         self.cfg_tower_zero = cfg.getfloat('AutoPilot', 'indexing_table_orientation_on_ship', fallback=0)
         self.cfg_target = cfg.getfloat('AutoPilot', 'optimal_angle_away_from_sun', fallback=135)
-
-        # Protected variables to run in parallel run_dir
-        self._gps_files, self._twr_files, self._sat_files = list(), list(), list()
-        self._gps_solar, self._twr_solar, self._sat_solar = list(), list(), list()
-        self._path_out, self._output_length = '', ''
 
     def read_sat(self, filenames):
         """
@@ -71,29 +71,6 @@ class Converter:
                     logger.warning(f'{os.path.basename(filename)}:Empty file.')
                     continue
                 # logger.debug(f'read in {time()-tic:.3f} s')
-                # Separate frames (too slow when multiple frame headers)
-                # tic = time()
-                # frames = [raw]
-                # for header in parsed_headers:
-                #     tmp = []
-                #     for d in frames:
-                #         data = d.split(header)
-                #         tmp = tmp + [header + data[0] if d.startswith(header) else data[0]] + [header + x for x in data[1:]]
-                #     frames = tmp
-                # logger.debug(f'split in {time() - tic:.3f} s')
-                # Parse Headers
-                # tic = time()
-                # headers = []
-                # n_frames = {}
-                # for frame in frames:
-                #     for header in parsed_headers:
-                #         if frame.startswith(header):
-                #             headers.append(header)
-                #             break
-                #     else:
-                #         # logger.debug(f'HeaderError: {frame}')
-                #         headers.append(None)
-                # logger.debug(f'headers in {time() - tic:.3f} s')
                 # Separate frames with regex
                 # tic = time()
                 frames = re.split(b'(' +  b'|'.join([re.escape(k.encode('ASCII'))
@@ -151,7 +128,7 @@ class Converter:
                                             parse_dates=[0, 1], infer_datetime_format=True))
                 except pd.errors.EmptyDataError:
                     logger.warning(f'Empty GPS file {f}')
-                except ValueError:
+                except (ValueError, IndexError):
                     logger.warning(f'Invalid GPS file {f}')
         if not data:
             logger.warning('No valid GPS data.')
@@ -265,12 +242,6 @@ class Converter:
         idx.dropna(inplace=True)
         idx.ig = idx.ig.astype(int, copy=False)
         idx.it = idx.it.astype(int, copy=False)
-        # Compute sun elevation
-        global sun_position
-
-        def sun_position(args):
-            # args = lat, lon, dt_utc, altitude
-            return f'{get_azimuth(*args):05.1f}', f'{get_altitude(*args):04.1f}'
 
         # Down-sample input as sun position change slowly compared to sampling rate
         sun = gps.loc[gps.fix_ok & gps.datetime_valid, ['latitude', 'longitude', 'gps_datetime', 'altitude']]
@@ -286,7 +257,7 @@ class Converter:
             sun['azimuth'], sun['elevation'] = '', ''
             for i, row in tqdm(sun.iterrows(), 'Computing SunPos', total=len(sun)):
                 sun.loc[i, 'azimuth'], sun.loc[i, 'elevation'] = \
-                    sun_position((row.latitude, row.longitude, row.gps_datetime, row.altitude))
+                    sun_position((row.latitude, row.longitude, row.gps_datetime.to_pydatetime(), row.altitude))
         sun.set_index('index', inplace=True)
         m_sun = pd.DataFrame(index=idx.ig)
         m_sun['azimuth'], m_sun['elevation'] = sun['azimuth'], sun['elevation']

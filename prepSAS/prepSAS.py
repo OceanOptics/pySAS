@@ -110,7 +110,15 @@ class Converter:
         if not data:
             logger.warning('No valid Satlantic data.')
             return
-        return pd.concat(data, ignore_index=True).dropna()
+        data = pd.concat(data, ignore_index=True)
+        # Drop corrupted frames (check timestamp and length)
+        n = len(data)
+        data.dropna(inplace=True)
+        frame_lengths = data.header.replace(*zip(*[(k.encode('ascii'), 0 if v.variable_frame_length else v.frame_length)
+                                                   for k, v in self.parser.cal.items()]))
+        data.drop(data.index[(data.frame.str.len() != frame_lengths) & (frame_lengths != 0)], inplace=True)
+        logger.debug(f'Corrupted SAT frames dropped: {(n - len(data)) / n * 100:.2f} %')
+        return data
 
     @staticmethod
     def read_gps(filename):

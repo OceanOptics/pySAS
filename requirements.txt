@@ -1,10 +1,10 @@
-numpy>=1.16.2
-dash>=1.9.1
-dash-bootstrap-components>=0.9.1
+numpy==1.21.6
+dash==1.9.1
+dash-bootstrap-components==0.9.1
 geomag==0.9.2015
 gpiozero>=0.7.0
 pyserial>=3.4
 pysolar==0.8
-pytz>=2019.3
+pytz==2019.3
 ubxtranslator==0.1.1
-pySatlantic==0.2.6
+pySatlantic==0.4.1

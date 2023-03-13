@@ -712,7 +712,7 @@ class HyperOCR(Sensor):
             elif 'ES' == cal.core_groupname and 'SATHED' in packet_header:
                 self._dispatcher[packet_header] = 'Es_dark'
             else:
-                raise ValueError('Unable to find type of HyperSAS frame header.')
+                self.__logger.warning(f'Packet header {packet_header} ignored.')
 
     def set_wavelengths(self):
         Lt_frame_header, Li_frame_header, Es_frame_header = None, None, None

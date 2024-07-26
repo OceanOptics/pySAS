@@ -5,6 +5,7 @@ from datetime import datetime
 from math import isnan
 from threading import Thread, Lock
 import logging
+from struct import unpack_from
 from pySAS.log import Log, LogBinary, pack_timestamp_satlantic
 from gpiozero import OutputDevice
 from gpiozero.pins.mock import MockFactory  # required for virtual hardware
@@ -12,7 +13,7 @@ from gpiozero.exc import BadPinFactory
 import os
 from ubxtranslator.core import Parser as UBXParser
 from pySAS.ubxtranslator_messages import NAV_ARDUSIMPLE
-from configparser import NoOptionError
+from configparser import NoOptionError, ConfigParser
 import pytz
 from pySatlantic.instrument import Instrument as SatlanticParser
 from pySatlantic.instrument import FrameError as SatlanticFrameError
@@ -588,6 +589,128 @@ class GPS(Sensor):
                                              self.speed, self.speed_accuracy,
                                              self.latitude, self.longitude, self.horizontal_accuracy,
                                              self.altitude, self.altitude_accuracy, self.fix_ok, self.fix_type, packet[1]], timestamp)
+                finally:
+                    self._data_logger_lock.release()
+            else:
+                self.__logger.error('unable to acquire data_logger to write data')
+
+
+class IMU(Sensor):
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.__logger = logging.getLogger(self.__class__.__name__)  # Need to recall logger as it's private
+
+        # Update loggers
+        self._data_logger = Log({'filename_prefix': self.__class__.__name__,
+                                 'path': cfg.get(self.__class__.__name__, 'path_to_data',
+                                                 fallback=os.path.join(os.path.dirname(__file__), 'data')),
+                                 'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
+                                 'variable_names': ['datetime', 'yaw', 'pitch',
+                                                    'roll', 'x_accel', 'y_accel',
+                                                    'z_accel', 'validity',],
+                                 'variable_units': ['yyyy-mm-dd HH:MM:SS.us', 'deg', 'deg',
+                                                    'deg', 'm/s^2', 'm/s^2',
+                                                    'm/s^2', 'bool',],
+                                 'variable_precision': ['%s', '%.5f', '%.5f',
+                                                        '%.5f', '%.5f','%.5f',
+                                                        '%.5f', '%s',]})
+        self._data_logger_lock = Lock()
+        self._log_data = False
+        self.ser = Serial(port=cfg.get(self.__class__.__name__, 'port', fallback=None),
+                          baudrate=int(cfg.get(self.__class__.__name__, 'baudrate', fallback=115200)),
+                          timeout=int(cfg.get(self.__class__.__name__, 'timeout', fallback=2)))
+
+        # Variables
+        self.datetime = float('nan')
+        self.yaw = float('nan')
+        self.pitch = float('nan')
+        self.roll = float('nan')
+        self.x_accel = float('nan')
+        self.y_accel = float('nan')
+        self.z_accel = float('nan')
+        # for validation
+        self.valid = False
+
+
+    def start_logging(self):
+        if not self._log_data:
+            self.__logger.debug('start logging')
+            if not self.alive:
+                self.__logger.info('not alive')
+            self._log_data = True
+
+    def stop_logging(self):
+        if self._log_data:
+            self.__logger.debug('stop logging')
+            self._log_data = False
+            if self._data_logger_lock.acquire(timeout=2):
+                try:
+                    self._data_logger.close()
+                finally:
+                    self._data_logger_lock.release()
+            else:
+                self.__logger.warning('Unable to acquire data_logger to close file')
+
+    def run(self):
+        while self.alive:
+            packet = None
+            try:
+                date_time = datetime.utcnow()
+                validate = self.ser.read(2)
+                if validate and validate[0] == 0xAA and validate[1] == 0xAA:
+                    try:
+                        msg = self.ser.read(17)
+                        packet = unpack_from("<BhhhhhhBBBB", msg)
+                        check_sum = sum(msg[0:16]) % 256
+                    except:
+                        packet = None
+
+                timestamp = time()
+                if packet:
+                    self.handle_packet(packet, timestamp, date_time, check_sum)
+
+            except OSError as e:
+                self.__logger.error(e)
+                self.__logger.error('device disconnected or multiple access on port?')
+                # self.stop(from_thread=True)
+                sleep(1)
+            except ValueError as e:
+                self.__logger.error(e)
+                self.__logger.error('corrupted message')
+                sleep(1)
+            except Exception as e:
+                self.__logger.error(e)
+                sleep(1)
+
+    def handle_packet(self, packet, timestamp, date_time, check_sum):
+        if packet is not None:
+            try:
+                # Get date and time
+                self.datetime = date_time
+                # Get Position
+                self.yaw = packet[2]*.01
+                self.pitch = packet[3]*.01
+                self.roll = packet[4]*.01
+                self.x_accel = packet[5]*0.0098067
+                self.y_accel = packet[6]*0.0098067
+                self.z_accel = packet[7]*0.0098067
+                self.valid = bool(check_sum != packet[8])
+                # Timestamp data
+            finally:
+                self.packet_pvt_received = timestamp
+        else:
+            self.__logger.warning('packet not supported')
+            return
+
+        # Write parsed data
+        if self._log_data:
+            if self._data_logger_lock.acquire(timeout=0.5):
+                try:
+                    self._data_logger.write([self.datetime.strftime('%Y/%m/%d %H:%M:%S.%f'),
+                                             self.yaw, self.pitch, self.roll, self.x_accel,
+                                             self.y_accel, self.z_accel, self.valid,],
+                                            timestamp)
                 finally:
                     self._data_logger_lock.release()
             else:

@@ -1,6 +1,6 @@
 import configparser
-from time import sleep
-from pySAS.interfaces import IndexingTable, GPS, HyperSAS
+from time import sleep, time
+from pySAS.interfaces import IndexingTable, GPS, HyperSAS, IMU
 
 
 class SlowIndexingTable(IndexingTable):
@@ -42,17 +42,23 @@ class TestingProcedure:
         self.gps = GPS(self.cfg)
         self.gps.start()
 
+        self.imu = IMU(self.cfg)
+        self.imu.start()
+
     def start_sensors(self):
         """Starts sensors & logging, only starts GPS logger"""
         self.gps.start_logging()
+        self.imu.start_logging()
         self.indexing_table.start()
         self.hypersas.start()
 
-    def stop_sensors(self, stop_gps=False):
+    def stop_sensors(self, stop_gps=False, stop_IMU=False):
         """Stops sensors, with option to stop GPS & GPS Logger"""
         self.gps.stop_logging()
         if stop_gps:
             self.gps.stop()
+        if stop_IMU:
+            self.imu.stop()
         self.hypersas.stop()
         self.indexing_table.stop()
 

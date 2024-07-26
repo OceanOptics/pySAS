@@ -337,7 +337,7 @@ class Converter:
             data.frame,
             data.timestamp.dt.strftime('%Y%j').astype(int).to_list(),
             data.timestamp.dt.strftime('%H%M%S%f').str[:-3].astype(int).to_list()
-        )])
+        ) if not pd.isna(f)])
         # Write to file
         with open(filename, mode='wb') as f:
             logger.debug(f'Writing {os.path.basename(filename)}')
@@ -417,7 +417,7 @@ if __name__ == '__main__':
     parser.add_argument('-f', '--file_out_prefix', nargs='?', help="prefix of output file when process directory")
     parser.add_argument('-e', '--experiment', nargs='?', help="SeaBASS name of experiment")
     parser.add_argument('-c', '--cruise', nargs='?', help="SeaBASS name of cruise")
-    parser.add_argument('out', required=True, help="path to directory or filename of converted data.")
+    parser.add_argument('out', help="path to directory or filename of converted data.")
 
     args = parser.parse_args()
 

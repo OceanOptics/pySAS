@@ -43,12 +43,11 @@ class TestingProcedure:
         self.gps.start()
 
         self.imu = IMU(self.cfg)
-        self.imu.start()
 
     def start_sensors(self):
         """Starts sensors & logging, only starts GPS logger"""
         self.gps.start_logging()
-        self.imu.start_logging()
+        self.imu.start()
         self.indexing_table.start()
         self.hypersas.start()
 
@@ -99,5 +98,3 @@ if __name__ == "__main__":
     tp.run(5)
     tp.run(5)
     tp.run(5)
-
-

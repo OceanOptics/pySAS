@@ -1,3 +1,5 @@
+import struct
+
 from serial import Serial, SerialException
 from timeit import default_timer
 from time import sleep, time
@@ -6,7 +8,7 @@ from math import isnan
 from threading import Thread, Lock
 import logging
 from struct import unpack_from
-from pySAS.log import Log, LogBinary, pack_timestamp_satlantic
+from pySAS.log import Log, LogBinary, pack_timestamp_satlantic, SatlanticLogger
 from gpiozero import OutputDevice
 from gpiozero.pins.mock import MockFactory  # required for virtual hardware
 from gpiozero.exc import BadPinFactory
@@ -80,13 +82,6 @@ class IndexingTable:
         self._serial_port = cfg.get(self.__class__.__name__, 'port')
         # Loggers
         self.__logger = logging.getLogger(self.__class__.__name__)
-        self._log_data = Log({'filename_prefix': self.__class__.__name__,
-                              'path': cfg.get(self.__class__.__name__, 'path_to_data',
-                                              fallback=os.path.join(os.path.dirname(__file__), 'data')),
-                              'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
-                              'variable_names': ['position', 'stall_flag', 'type'],
-                              'variable_units': ['degrees', '1:stalled | 0:ok', 'get|set|reset'],
-                              'variable_precision': ['%.2f', '%s', '%s']})
         # Serial
         self._serial = get_serial_instance(self.__class__.__name__, cfg)
         # GPIO
@@ -106,6 +101,7 @@ class IndexingTable:
         self.alive = False
         self.stalled = False
         self.position = float('nan')
+        self.packet_received = float('nan')
         # Register methods to execute at exit as cannot use __del__ as logging is already off-loaded
         atexit.register(self.stop)
 
@@ -128,7 +124,7 @@ class IndexingTable:
 
     def set_configuration(self):
         self._serial.write(b'\x03')  # ctrl+c for resetting motor  # TODO Might Loose zero position due to that
-        self._log_data.write([float('nan'), 'nan', 'set_cfg'], time())
+        self.__logger.debug('set_configuration')
         sleep(0.5)                   # Reset takes longer than standard COMMAND_EXECUTION_TIME
         # Settings motor configuration
         self._serial.write(bytes('ee=1' + self.TERMINATOR, self.ENCODING))  # First command so no need for registration (backspace)
@@ -176,7 +172,6 @@ class IndexingTable:
                 return False
         else:
             self.position = position_degrees
-        self._log_data.write([position_degrees, 'nan', 'set'], time())
         return True
 
     def get_position(self):
@@ -184,7 +179,6 @@ class IndexingTable:
             self.__logger.error('get_position: unable, not alive')
             self.position = float('nan')
             return self.position
-        # self.__logger.debug('get_position()')
         # Flush serial buffer
         self._serial_read()
         # Ask current position of encoder to motor
@@ -197,11 +191,11 @@ class IndexingTable:
             try:
                 pos_steps = int(msg.decode(self.ENCODING, self.UNICODE_HANDLING).strip())
                 self.position = pos_steps / self.GEAR_BOX_RATIO
+                self.__logger.info(f'get_position: {self.position:.2f}')
             except ValueError or UnicodeDecodeError:
                 self.__logger.error('unable to parse position')
                 self.position = float('nan')
             finally:
-                self._log_data.write([self.position, 'nan', 'get'], time())
                 return self.position
         else:
             self.__logger.error('unable to get position')
@@ -217,8 +211,9 @@ class IndexingTable:
         """
         self.stalled = self.get_flag('st')
         if self.stalled:
-            self.__logger.debug('STALLED')
-        self._log_data.write([float('nan'), self.stalled, 'nan'], time())
+            self.__logger.warning(f'get_stall_flag: stalled')
+        else:
+            self.__logger.debug(f'get_stall_flag: operational')
         return self.stalled
 
     def get_flag(self, flag_name):
@@ -272,19 +267,17 @@ class IndexingTable:
         if not self.alive:
             self.__logger.error('reset_position_zero: unable, not alive')
             return
-        self.__logger.info('reset zero')
+        self.__logger.warning('reset_position_zero: reset zero')
         self._serial.write(bytes(self.REGISTRATOR + 'p=0' + self.TERMINATOR, self.ENCODING))
         self.position = 0
-        self._log_data.write([0, 'nan', 'reset'], time())
 
     def reset_stall_flag(self):
         if not self.alive:
             self.__logger.error('reset_stall_flag: unable, not alive')
             return
-        self.__logger.warning('reset stall flag')
+        self.__logger.warning('reset_stall_flag: reset stall flag')
         self._serial.write(bytes(self.REGISTRATOR + 'st=0' + self.TERMINATOR, self.ENCODING))
         self.stalled = False
-        self._log_data.write([float('nan'), False, 'reset'], time())
 
     def measure_motion_speed(self, test_position=360, timeout=20, delta_position=0.01):
         if not self.alive:
@@ -317,6 +310,7 @@ class IndexingTable:
 
     def _serial_read(self):
         if self._serial.in_waiting > 0:
+            self.packet_received = time()
             return self._serial.read(self._serial.in_waiting)
         else:
             return None
@@ -331,8 +325,6 @@ class IndexingTable:
                     self.reset_stall_flag()
                 # Move indexing table back to 0
                 self.set_position(0, check_stall_flag=True)
-            # Close log
-            self._log_data.close()
             # Stop serial connection
             if hasattr(self._serial, 'cancel_read'):
                 self._serial.cancel_read()
@@ -365,7 +357,7 @@ class Sensor:
         cls._instances.append(super(Sensor, cls).__new__(cls))
         return cls._instances[-1]
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, data_logger=None, enable_gpio=True):
         # Prevent re-init if asking for second instance
         if hasattr(self, '_serial_port'):
             self.__logger.debug(self.__class__.__name__ + ' already initialized for port ' + self._serial_port)
@@ -373,22 +365,26 @@ class Sensor:
         self._serial_port = cfg.get(self.__class__.__name__, 'port')
         # Loggers
         self.__logger = logging.getLogger(self.__class__.__name__)
-        self._data_logger = Log({'filename_prefix': self.__class__.__name__,
-                                 'path': cfg.get(self.__class__.__name__, 'path_to_data',
-                                                 fallback=os.path.join(os.path.dirname(__file__), 'data')),
-                                 'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
+        self._data_logger = data_logger if data_logger is not None else SatlanticLogger(
+            {'filename_prefix': self.__class__.__name__,
+             'path': cfg.get(self.__class__.__name__, 'path_to_data',
+                             fallback=os.path.join(os.path.dirname(__file__), 'data')),
+             'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
         # Serial
         self._serial = get_serial_instance(self.__class__.__name__, cfg)
         # GPIO
-        try:
-            # Try to load physical pin factory (Factory())
-            self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
-                                       active_high=False, initial_value=False)
-        except BadPinFactory:
-            # No physical gpio library installed, likely running on development platform
-            self.__logger.warning('Loading GPIO Mock Factory')
-            self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
-                                       active_high=False, initial_value=False, pin_factory=MockFactory())
+        if enable_gpio:
+            try:
+                # Try to load physical pin factory (Factory())
+                self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
+                                           active_high=False, initial_value=False)
+            except BadPinFactory:
+                # No physical gpio library installed, likely running on development platform
+                self.__logger.warning('Loading GPIO Mock Factory')
+                self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
+                                           active_high=False, initial_value=False, pin_factory=MockFactory())
+        else:
+            self._relay = None
         # Thread
         self._thread = None
         self.alive = False
@@ -398,13 +394,15 @@ class Sensor:
     def start(self):
         if not self.alive:
             self.__logger.debug('start')
-            self._relay.on()
+            if self._relay is not None:
+                self._relay.on()
             sleep(0.5)  # Leave time for sensor to turn on
             try:
                 self._serial.open()
             except SerialException as e:
                 self.__logger.critical(e)
-                self._relay.off()
+                if self._relay is not None:
+                    self._relay.off()
                 return
             self.alive = True
             self._thread = Thread(name=self.__class__.__name__, target=self.run)
@@ -417,13 +415,14 @@ class Sensor:
             self.alive = False
             if hasattr(self._serial, 'cancel_read'):
                 self._serial.cancel_read()
-            # TODO Find elegant way to immediatly stop thread as slow down user interface when switching from auto to manual mode
+            # TODO Find elegant way to immediatly stop thread as slow down user interface when switching from auto to manual mode (timeout in serial won't do it as use serial.cancel_read)
             if not from_thread:
                 self._thread.join(2)
                 if self._thread.is_alive():
                     self.__logger.error('Thread did not join.')
             self._serial.close()
-            self._relay.off()
+            if self._relay is not None:
+                self._relay.off()
             self._data_logger.close()  # Required to start new log_data file when instrument restart
 
 
@@ -578,8 +577,7 @@ class GPS(Sensor):
 
         # Write parsed data
         if self._log_data:
-            # TODO Optimize logging to only write when received both frames (prevent replicated data)
-            if self._data_logger_lock.acquire(timeout=0.5):
+            if self._data_logger_lock.acquire(timeout=0.5):  # Need in case stop logging
                 try:
                     self._data_logger.write([self.datetime.strftime('%Y/%m/%d %H:%M:%S.%f'),
                                              self.datetime_accuracy, self.datetime_valid,
@@ -596,125 +594,102 @@ class GPS(Sensor):
 
 
 class IMU(Sensor):
+    """
+    Read Data from BNO085 in UART-RVC mode
+    """
 
-    def __init__(self, cfg):
-        super().__init__(cfg)
+    def __init__(self, cfg, data_logger=None):
+        super().__init__(cfg, data_logger, enable_gpio=False)
         self.__logger = logging.getLogger(self.__class__.__name__)  # Need to recall logger as it's private
-
-        # Update loggers
-        self._data_logger = Log({'filename_prefix': self.__class__.__name__,
-                                 'path': cfg.get(self.__class__.__name__, 'path_to_data',
-                                                 fallback=os.path.join(os.path.dirname(__file__), 'data')),
-                                 'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
-                                 'variable_names': ['datetime', 'yaw', 'pitch',
-                                                    'roll', 'x_accel', 'y_accel',
-                                                    'z_accel', 'validity',],
-                                 'variable_units': ['yyyy-mm-dd HH:MM:SS.us', 'deg', 'deg',
-                                                    'deg', 'm/s^2', 'm/s^2',
-                                                    'm/s^2', 'bool',],
-                                 'variable_precision': ['%s', '%.5f', '%.5f',
-                                                        '%.5f', '%.5f','%.5f',
-                                                        '%.5f', '%s',]})
-        self._data_logger_lock = Lock()
-        self._log_data = False
-        self.ser = Serial(port=cfg.get(self.__class__.__name__, 'port', fallback=None),
-                          baudrate=int(cfg.get(self.__class__.__name__, 'baudrate', fallback=115200)),
-                          timeout=int(cfg.get(self.__class__.__name__, 'timeout', fallback=2)))
-
+        # Get configuration
+        self.serial_number = cfg.getint(self.__class__.__name__, 'serial_number', fallback=1500)
+        data_format = cfg.get(self.__class__.__name__, 'data_format', fallback='satths').lower()
+        if data_format == 'list':
+            self.format_data = self.format_data_as_list
+        elif data_format == 'satths':
+            self.format_data = self.format_data_as_satths
+        elif data_format == 'satths_ttcm':
+            self.format_data = self.format_data_as_satths_ttcm
+        else:
+            raise ValueError('data_format must be "list" or "sat"')
+        # Update data logger
+        # self._data_logger = Log({'filename_prefix': self.__class__.__name__,
+        #                          'path': cfg.get(self.__class__.__name__, 'path_to_data',
+        #                                          fallback=os.path.join(os.path.dirname(__file__), 'data')),
+        #                          'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
+        #                          'variable_names': ['yaw', 'pitch', 'roll', 'x_accel', 'y_accel', 'z_accel',],
+        #                          'variable_units': ['deg', 'deg', 'deg', 'm/s^2', 'm/s^2', 'm/s^2'],
+        #                          'variable_precision': ['%.2f', '%.2f', '%.2f', '%.5f','%.5f', '%.5f']})
+        self.decimate = cfg.getint(self.__class__.__name__, 'decimate', fallback=10)
+        self.separator = b'\xAA\xAA'
+        self.separator_len = len(self.separator)
         # Variables
-        self.datetime = float('nan')
         self.yaw = float('nan')
         self.pitch = float('nan')
         self.roll = float('nan')
         self.x_accel = float('nan')
         self.y_accel = float('nan')
         self.z_accel = float('nan')
-        # for validation
-        self.valid = False
-
-
-    def start_logging(self):
-        if not self._log_data:
-            self.__logger.debug('start logging')
-            if not self.alive:
-                self.__logger.info('not alive')
-            self._log_data = True
-
-    def stop_logging(self):
-        if self._log_data:
-            self.__logger.debug('stop logging')
-            self._log_data = False
-            if self._data_logger_lock.acquire(timeout=2):
-                try:
-                    self._data_logger.close()
-                finally:
-                    self._data_logger_lock.release()
-            else:
-                self.__logger.warning('Unable to acquire data_logger to close file')
+        # Internal variables
+        self.packet_received = float('nan')
+        self.counter = 0
+        self.t0 = time()
 
     def run(self):
+        self.t0 = time()
         while self.alive:
-            packet = None
             try:
-                date_time = datetime.utcnow()
-                validate = self.ser.read(2)
-                if validate and validate[0] == 0xAA and validate[1] == 0xAA:
-                    try:
-                        msg = self.ser.read(17)
-                        packet = unpack_from("<BhhhhhhBBBB", msg)
-                        check_sum = sum(msg[0:16]) % 256
-                    except:
-                        packet = None
-
-                timestamp = time()
+                packet = self._serial.read_until(self.separator, 256)  # return less than expected if timeout occurs
                 if packet:
-                    self.handle_packet(packet, timestamp, date_time, check_sum)
+                    timestamp = time()
+                    try:
+                        self.handle_packet(packet[:-self.separator_len], timestamp)  # Drop separator
+                    except Exception as e:
+                        self.__logger.error(e)
+                        sleep(0.1)
+            except SerialException:
+                self.__logger.error(e)
+                self.stop(from_thread=True)
 
-            except OSError as e:
-                self.__logger.error(e)
-                self.__logger.error('device disconnected or multiple access on port?')
-                # self.stop(from_thread=True)
-                sleep(1)
-            except ValueError as e:
-                self.__logger.error(e)
-                self.__logger.error('corrupted message')
-                sleep(1)
-            except Exception as e:
-                self.__logger.error(e)
-                sleep(1)
-
-    def handle_packet(self, packet, timestamp, date_time, check_sum):
-        if packet is not None:
-            try:
-                # Get date and time
-                self.datetime = date_time
-                # Get Position
-                self.yaw = packet[2]*.01
-                self.pitch = packet[3]*.01
-                self.roll = packet[4]*.01
-                self.x_accel = packet[5]*0.0098067
-                self.y_accel = packet[6]*0.0098067
-                self.z_accel = packet[7]*0.0098067
-                self.valid = bool(check_sum != packet[8])
-                # Timestamp data
-            finally:
-                self.packet_pvt_received = timestamp
+    def handle_packet(self, packet, timestamp):
+        # Check sum
+        if len(packet) == 17 and bool(sum(packet[0:15]) % 256 == packet[16]):
+            # Unpack data
+            data = unpack_from("<BhhhhhhBBBB", packet)
+            self.counter = data[0]
+            self.yaw = data[1] * .01
+            self.pitch = data[2] * .01
+            self.roll = data[3] * .01
+            self.x_accel = data[4] * 0.0098067
+            self.y_accel = data[5] * 0.0098067
+            self.z_accel = data[6] * 0.0098067
         else:
-            self.__logger.warning('packet not supported')
+            # Corrupted packet
+            self.counter, self.yaw, self.pitch, self.roll, self.x_accel, self.y_accel, self.z_accel = [float('nan')]*7
+        self.packet_received = timestamp
+        if isnan(self.yaw):
             return
-
         # Write parsed data
-        if self._log_data:
-            if self._data_logger_lock.acquire(timeout=0.5):
-                try:
-                    self._data_logger.write([self.datetime.strftime('%Y/%m/%d %H:%M:%S.%f'),
-                                             self.yaw, self.pitch, self.roll, self.x_accel,
-                                             self.y_accel, self.z_accel, self.valid,],
-                                            timestamp)
-                finally:
-                    self._data_logger_lock.release()
-            else:
-                self.__logger.error('unable to acquire data_logger to write data')
+        if not self.counter % self.decimate:
+            self._data_logger.write(self.format_data(), timestamp)
+
+    def format_data_as_list(self):
+        return [self.yaw, self.pitch, self.roll, self.x_accel, self.y_accel, self.z_accel]
+
+    def format_data_as_satths_ttcm(self):
+        # Format following output of Satlantic Tilt/Heading Sensor in TTCM mode (SN0009)
+        frame = (f'SATTHS{self.serial_number:04d},{self.counter},{self.packet_received - self.t0:7.2f},'
+                 f'$R{self.roll:.2f}P{self.pitch:.2f}'
+                 f'T{0:.1f}'  # Internal Temperature (forced to 0)
+                 f'X{self.x_accel:.5f}Y{self.y_accel:.5f}Z{self.z_accel:.5f}'  # Magnetic Field (replace by acceleration)
+                 f'C{self.yaw}')  # Compass heading
+        checksum = (0 - sum(frame)) % 256  # checksum
+        return f'{frame}\x2A{checksum:02x}\x0D\x0A'.encode('ascii')
+
+    def format_data_as_satths(self):
+        # Format following output of Satlantic Tilt/Heading Sensor of unit SN0045
+        return (f'SATTHS{self.serial_number:04d},{self.counter},{self.packet_received - self.t0:7.2f},'
+                f',{self.yaw:.1f},{self.pitch:.1f},{self.roll:.1f}\x0D\x0A').encode('ascii')
 
 
 class HyperOCR(Sensor):
@@ -723,15 +698,14 @@ class HyperOCR(Sensor):
     DATA_TIMEOUT = 60  # seconds
 
     def __init__(self, cfg, data_logger=None, parser=None):
-        super().__init__(cfg)
+        super().__init__(cfg, data_logger)
         self.__logger = logging.getLogger(self.__class__.__name__)
 
         if data_logger is None:
-            self._data_logger = LogBinary({'filename_prefix': self.__class__.__name__,
+            self._data_logger = SatlanticLogger({'filename_prefix': self.__class__.__name__,
                                            'path': cfg.get(self.__class__.__name__, 'path_to_data',
                                                            fallback=os.path.join(os.path.dirname(__file__), 'data')),
                                            'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
-            self._data_logger.timestamp_packer = pack_timestamp_satlantic
         else:
             self._data_logger = data_logger
 
@@ -772,6 +746,9 @@ class HyperOCR(Sensor):
         self.packet_Es_dark_parsed = float('nan')
         self.packet_THS_parsed = float('nan')
 
+        heading_source = cfg.get(self.__class__.__name__, 'heading_source', fallback='gps_relative_position')
+        self.auto_parse_ths = heading_source == 'ths_heading'
+
         # Set device file (which sets dispatcher and wavelengths)
         self._parser = SatlanticParser()
         self._parser_device_file = None
@@ -785,8 +762,8 @@ class HyperOCR(Sensor):
                 self.__logger.warning('Calibration file parameter "sip" absent from pysas_cfg.ini.')
             except FileNotFoundError:
                 self.__logger.critical('The calibration file specified in the configuration was not found. '
-                                    'Please set a calibration file using the button "Select or Upload" under '
-                                    'the section "HyperSAS Device File" at the bottom of the sidebar.')
+                                       'Please set a calibration file using the button "Select or Upload" under '
+                                       'the section "HyperSAS Device File" at the bottom of the sidebar.')
             except SatlanticCalibrationFileError:
                 self.__logger.critical('Error while loading the calibration file specified in the configuration. '
                                        'Please set a new calibration file using the button "Select or Upload" under '
@@ -931,9 +908,10 @@ class HyperOCR(Sensor):
                         self.logger.error(f'No data received during the past {timestamp - data_received:.2f} seconds')
                         data_timeout_flag = True
                         # Power cycle sensor
-                        self._relay.off()
-                        sleep(1)
-                        self._relay.on()
+                        if self._relay is not None:
+                            self._relay.off()
+                            sleep(1)
+                            self._relay.on()
             except SerialException as e:
                 self.__logger.error(e)
                 self.stop(from_thread=True)
@@ -960,6 +938,8 @@ class HyperOCR(Sensor):
             if self._dispatcher[packet_header] == 'THS':
                 self._packet_THS_raw = packet
                 self._packet_THS_received = timestamp
+                if self.auto_parse_ths:
+                    self.parse_ths()
             elif self._dispatcher[packet_header] == 'Lt':
                 self._packet_Lt_raw = packet
                 self._packet_Lt_received = timestamp
@@ -985,22 +965,28 @@ class HyperOCR(Sensor):
                 self.__missing_dispatcher_key.append(packet_header)
                 self.__logger.warning(f'Dispatcher does not support packet {packet_header}.')
 
+    def parse_ths(self):
+        """
+        Parse THS packet
+        :return:
+        """
+        try:
+            THS, _ = self._parser.parse_frame(self._packet_THS_raw)
+            self.packet_THS_parsed = time()
+            self.roll, self.pitch, self.compass = THS['ROLL'], THS['PITCH'], THS['COMP']
+        except SatlanticFrameError as e:
+            self.__logger.error('THS:' + e)
+            self.roll, self.pitch, self.compass = float('nan'), float('nan'), float('nan')
+            self._packet_THS_received = float('nan')
+
     def parse_packets(self):
         """
         Parse packet received since last parsing. Called by UX
         """
-
         # Parse THS
         if self._packet_THS_received > self.packet_THS_parsed or \
                 (isnan(self.packet_THS_parsed) and not isnan(self._packet_THS_received)):
-            try:
-                THS, _ = self._parser.parse_frame(self._packet_THS_raw)
-                self.packet_THS_parsed = time()
-                self.roll, self.pitch, self.compass = THS['ROLL'], THS['PITCH'], THS['COMP']
-            except SatlanticFrameError as e:
-                self.__logger.error('THS:' + e)
-                self.roll, self.pitch, self.compass = float('nan'), float('nan'), float('nan')
-                self._packet_THS_received = float('nan')
+            self.parse_ths()
         # Parse Lt Dark
         if self._packet_Lt_dark_received > self.packet_Lt_dark_parsed or \
                 (isnan(self.packet_Lt_dark_parsed) and not isnan(self._packet_Lt_dark_received)):

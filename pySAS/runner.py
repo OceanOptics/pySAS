@@ -1,3 +1,4 @@
+import os
 import logging
 import configparser
 from time import gmtime, time, sleep, strftime
@@ -7,7 +8,7 @@ import socket
 import atexit
 from subprocess import run
 from threading import Thread
-from pySAS.interfaces import IndexingTable, GPS, HyperSAS, Es
+from pySAS.interfaces import IndexingTable, GPS, HyperSAS, Es, IMU
 from pySAS import WORLD_MAGNETIC_MODEL
 
 # pySolar
@@ -16,6 +17,8 @@ import pytz
 # from pysolar.time import leap_seconds_adjustments   # v0.7
 from pysolar.solartime import leap_seconds_adjustments  # v0.8
 from pysolar.solar import get_azimuth, get_altitude
+
+from pySAS.log import SatlanticLogger
 
 
 class Runner:
@@ -59,6 +62,12 @@ class Runner:
         self.reboot_from_ui = False
         self.time_synced = None
         self.internet = check_internet()
+        self.data_logger = SatlanticLogger({
+            'length': self.cfg.getint('DataLogger', 'file_length', fallback=60),
+            'filename_prefix': self.cfg.get('DataLogger', 'filename_prefix', fallback=os.uname()[1].replace('pysas', 'pySAS')),
+            'filename_ext': self.cfg.get('DataLogger', 'filename_ext', fallback='raw'),
+            'path': self.cfg.get('DataLogger', 'path_to_data', fallback=os.path.join(os.path.dirname(__file__), 'data')),
+        })
 
         # Pilot
         self.pilot = AutoPilot(self.cfg)
@@ -70,32 +79,37 @@ class Runner:
 
         # Register methods to execute at exit as cannot use __del__ as logging is already off-loaded
         # Register before interfaces to make sure it's called last in case use shutdown
-        atexit.register(self.stop)
+        atexit.register(self.halt)
 
         # Controllers & Sensors
         self.indexing_table = IndexingTable(self.cfg)
         self.gps = GPS(self.cfg)
-        self.hypersas = HyperSAS(self.cfg)
+        self.hypersas = HyperSAS(self.cfg, self.data_logger)
         self.es = None
         if 'Es' in self.cfg.sections():
-            self.es = Es(self.cfg, data_logger=self.hypersas._data_logger, parser=self.hypersas._parser)
+            self.es = Es(self.cfg, self.data_logger, parser=self.hypersas._parser)
+        if 'IMU' in self.cfg.sections():
+            self.imu = IMU(self.cfg, self.data_logger)
 
         # Start if in auto_mode
         if self.operation_mode == 'auto':
-            self.start_auto()
+            self.start('auto')
+        elif self.operation_mode == 'manual':
+            self.start('manual')
 
-    def start_auto(self):
+    def start(self, mode='auto'):
         if not self.alive:
-            self.__logger.debug('start auto')
+            self.__logger.debug(f'start {mode}')
             self.gps.start()  # GPS is continuously running, could optimize to turn off at night and turn on every hour
             self.alive = True
-            self._thread = Thread(name=self.__class__.__name__, target=self.run_auto)
+            self._thread = Thread(name=self.__class__.__name__,
+                                  target=self.run_auto if mode == 'auto' else self.run_manual)
             self._thread.daemon = True
             self._thread.start()
 
-    def stop_auto(self):
+    def stop(self):
         if self.alive:
-            self.__logger.debug('stop auto')
+            self.__logger.debug(f'stop runner thread')
             self.alive = False
             self._thread.join(2)
             if self._thread.is_alive():
@@ -132,6 +146,8 @@ class Runner:
                             self.hypersas.stop()
                             if self.es:
                                 self.es.stop()
+                            if self.imu:
+                                self.imu.stop()
                             self.gps.stop_logging()
                             self.asleep = True
                         self.stop_sleep_timestamp = None
@@ -147,6 +163,8 @@ class Runner:
                             self.gps.start_logging()
                             if self.es:
                                 self.es.start()
+                            if self.imu:
+                                self.imu.start()
                             self.hypersas.start()
                             self.asleep = False
                     self.start_sleep_timestamp = None
@@ -182,10 +200,32 @@ class Runner:
                                     flag_stalled = False
                                 if flag_no_position:
                                     flag_no_position = False
+                    # Log Tower and Ship headings and status
+                    # TODO Find way to log data in manual mode
+                    self.data_logger.write(*self.make_umtwr_frame())
 
             except Exception as e:
                 self.__logger.critical(e)
 
+            # Wait before next iteration
+            if self.alive:
+                self._wait(iteration_timestamp)
+
+    def run_manual(self):
+        while self.alive:
+            # Timer
+            iteration_timestamp = time()
+            try:
+                # Do things only if HyperSAS is measuring
+                if not self.hypersas.alive:
+                    self._wait(iteration_timestamp)
+                    continue
+                # Get Sun Position (requires gps)
+                self.get_sun_position()
+                # Write Tower Data (requires gps, sun position, and tower position)
+                self.data_logger.write(*self.make_umtwr_frame())
+            except Exception as e:
+                self.__logger.critical(e)
             # Wait before next iteration
             if self.alive:
                 self._wait(iteration_timestamp)
@@ -246,16 +286,17 @@ class Runner:
                 return True
         elif self.heading_source == 'gps_motion':
             if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
-                self.ship_heading = self.pilot.get_ship_heading(self.gps.heading_motion)
+                self.ship_heading = self.pilot.get_ship_heading(self.gps.heading_motion)  # TODO Check if need compass orientation correction
                 self.ship_heading_timestamp = self.gps.packet_pvt_received
                 return True
         elif self.heading_source == 'gps_vehicle':
             if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
-                self.ship_heading = self.pilot.get_ship_heading(self.gps.heading_vehicle)
+                self.ship_heading = self.pilot.get_ship_heading(self.gps.heading_vehicle)  # TODO Check if need compass orientation correction
                 self.ship_heading_timestamp = self.gps.packet_pvt_received
                 return True
         elif self.heading_source == 'ths_heading':
-            if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
+            if (self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY and
+                    not isnan(self.hypersas.compass) and time() - self.hypersas.packet_THS_parsed < self.DATA_EXPIRED_DELAY):
                 self.hypersas.compass_adj = get_true_north_heading(self.hypersas.compass,
                                                                    self.gps.latitude, self.gps.longitude,
                                                                    self.gps.datetime, self.gps.altitude)
@@ -265,6 +306,40 @@ class Runner:
         else:
             raise ValueError('Invalid heading source')
         return False
+
+    def make_umtwr_frame(self):
+        # Ship Heading (based on relative RTK GPS position regardless of setting, as only point where it's reported)
+        if self.gps.heading_valid and time() - self.gps.packet_relposned_received < self.DATA_EXPIRED_DELAY:
+            ship_heading = self.pilot.get_ship_heading(self.gps.heading) % 360
+            ship_heading_accuracy = self.gps.heading_accuracy
+        else:
+            ship_heading = float('nan')
+            ship_heading_accuracy = float('nan')
+        # Motion Heading
+        if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
+            motion_heading = self.gps.heading_motion % 360
+            motion_heading_accuracy = self.gps.heading_vehicle_accuracy
+        else:
+            motion_heading = float('nan')
+            motion_heading_accuracy = float('nan')
+        # Tower & SAS Heading
+        if self.indexing_table.alive and time() - self.indexing_table.packet_received < self.DATA_EXPIRED_DELAY:
+            tower_status = 'S' if self.indexing_table.stalled else 'O'
+            tower_position = self.indexing_table.position
+            # SAS heading is based on user selected heading (relative, motion, vehicle, or THS)
+            sas_heading = (self.ship_heading - self.pilot.tower_zero + tower_position) % 360
+        else:
+            tower_status = 'N'
+            tower_position = float('nan')
+            sas_heading = float('nan')
+        # Final Frame
+        frame = (f'UMTWR,{sas_heading:.2f},{ship_heading:.2f},{ship_heading_accuracy:.2f},'
+                 f'{motion_heading:.1f},{motion_heading_accuracy:.1f},'
+                 f'{tower_position:.2f},{tower_status},{self.sun_azimuth:.1f},{self.sun_elevation:.1f}\r\n'
+                 .encode('ascii'))
+        timestamp = max((self.gps.packet_relposned_received, self.gps.packet_pvt_received,
+                         self.indexing_table.packet_received))
+        return frame, timestamp
 
     def set_cfg_variable(self, section, variable, value):
         if self.cfg.has_option(section, variable) and self.cfg[section][variable] == str(value):
@@ -282,8 +357,8 @@ class Runner:
         with open(self._cfg_filename, 'w') as cfg_file:
             self.cfg.write(cfg_file)
 
-    def stop(self):
-        self.stop_auto()
+    def halt(self):
+        self.stop()
         if self.reboot_from_ui and self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=True):
             run(("shutdown", "-r", "now"))
         if self.interrupt_from_ui and self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=False):

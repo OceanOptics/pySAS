@@ -31,10 +31,12 @@ app.title = 'pySAS v' + __version__
 figure_sun_model = html.P("")
 figure_spectrum_history = html.P("")
 
+core_instruments_names = "HyperSAS"
 if runner.es:
-    core_instruments_names = "HyperSAS+Es"
-else:
-    core_instruments_names = "HyperSAS"
+    core_instruments_names += "+Es"
+if runner.imu:
+    core_instruments_names += "+IMU"
+
 
 # Graph options
 graph_config = {'displaylogo': False, 'editable': False, 'displayModeBar': False, 'showTips': False}
@@ -298,9 +300,11 @@ def set_operation_mode(operation_mode, tower_switch, operation_mode_previous, to
             runner.operation_mode = operation_mode
             runner.set_cfg_variable('Runner', 'operation_mode', operation_mode)
             if runner.operation_mode == 'auto':
-                runner.start_auto()
-            else:
-                runner.stop_auto()
+                runner.stop()
+                runner.start('auto')
+            elif runner.operation_mode == 'manual':
+                runner.stop()
+                runner.start('manual')
     elif trigger == 'tower_switch.value':
         if get_switch_n_updates != get_switch_last_n_updates:
             logger.debug('set_operation_mode: called by get_switch')
@@ -403,6 +407,8 @@ def set_hypersas_switch(value, _, get_switch_n_updates, get_switch_last_n_update
             runner.gps.start_logging()
             if runner.es:
                 runner.es.start()
+            if runner.imu:
+                runner.imu.start()
             runner.hypersas.start()
         else:
             logger.debug('set_hypersas_switch: stop')
@@ -410,6 +416,8 @@ def set_hypersas_switch(value, _, get_switch_n_updates, get_switch_last_n_update
             runner.gps.stop_logging()
             if runner.es:
                 runner.es.stop()
+            if runner.imu:
+                runner.imu.stop()
     elif trigger == 'hypersas_switch.className':
         logger.debug('set_hypersas_switch: called by set_operation_mode')
     raise dash.exceptions.PreventUpdate()
@@ -712,6 +720,7 @@ def upload_device_file(change_option, content, filename, last_modified):
                     if es_was_alive:
                         runner.es.start()
                 runner.set_cfg_variable('HyperSAS', 'sip', path_to_file)
+                # IMU doesn't need to be updated as parser is hardcoded
                 flag_success = True
             except BadZipFile as e:
                 logger.warning('upload_device_file: unable to load file')
@@ -780,6 +789,7 @@ def select_device_file(filename):
             if es_was_alive:
                 runner.es.start()
         runner.set_cfg_variable('HyperSAS', 'sip', path_to_file)
+        # IMU doesn't need to be updated as parser is hardcoded
         # Done, raise dash prevent update outside try
     except BadZipFile as e:
         logger.warning('select_device_file: unable to load file')
@@ -913,7 +923,19 @@ def update_figure_system_orientation(_, tower_orientation, tower_limit_prt, towe
     # Get HyperSAS Heading
     ths = float('nan')
     if timestamp - runner.hypersas.packet_THS_parsed < runner.DATA_EXPIRED_DELAY:
-        ths = runner.hypersas.compass_adj
+        if isnan(runner.gps.latitude):
+            ths = runner.hypersas.compass
+        else:
+            ths = runner.hypersas.compass_adj
+    # Get IMU Heading
+    imu = float('nan')
+    if timestamp - runner.imu.packet_received < runner.DATA_EXPIRED_DELAY:
+        if isnan(runner.gps.latitude):
+            imu = runner.imu.yaw
+        else:
+            imu = get_true_north_heading(runner.imu.yaw,
+                                         runner.gps.latitude, runner.gps.longitude,
+                                         runner.gps.datetime, runner.gps.altitude)
     # Get motion heading from GPS
     motion = float('nan')
     if timestamp - runner.gps.packet_pvt_received < runner.DATA_EXPIRED_DELAY and \
@@ -954,9 +976,17 @@ def update_figure_system_orientation(_, tower_orientation, tower_limit_prt, towe
                                       r=[0, 1],
                                       theta=[0, ths],
                                       marker=dict(symbol=['circle', 'bowtie'], color='#1a76ff', size=8),
-                                      name='HyperSAS THS',
+                                      name='HyperSAS THS' + ' (Magnetic N)' if isnan(runner.gps.latitude) else '',
                                       opacity=0.3,
                                       line_color='#1a76ff'))
+    if not isnan(imu):
+        traces.append(go.Scatterpolar(mode='lines+markers',
+                                      r=[0, 1],
+                                      theta=[0, imu],
+                                      marker=dict(symbol=['circle', 'triangle-up'], color='black', size=8),
+                                      name='IMU' + ' (Magnetic N)' if isnan(runner.gps.latitude) else '',
+                                      opacity=0.3,
+                                      line_color='black'))
     if not isnan(motion):
         traces.append(go.Scatterpolar(mode='lines+markers',
                                       r=[0, 1],

@@ -1,6 +1,11 @@
 import os
-from time import gmtime, strftime
+from math import isnan
+from queue import Queue, Empty
+from threading import Thread
+from time import gmtime, strftime, time
 from struct import pack
+import atexit
+from typing import Union, IO
 
 
 class Log:
@@ -49,7 +54,6 @@ class Log:
                                     strftime('%Y%m%d_%H%M%S', gmtime(timestamp)) + '_' + str(suffix) + self.FILE_EXT)
             suffix += 1
         # Create File
-        # TODO add exception in case can't open file
         self._file = open(filename, self.FILE_MODE)
         # Write header (only if has variable names)
         if self.variable_names:
@@ -143,3 +147,138 @@ class LogText(Log):
         self._smart_open(timestamp)
         self._file.write(strftime('%Y/%m/%d %H:%M:%S', gmtime(timestamp)) + ("%.3f" % timestamp)[-4:] +
                          ', ' + self.registration + data.decode(self.ENCODING, self.UNICODE_HANDLING) + self.terminator)
+
+
+class SatlanticLogger:
+    """
+    Thread Safe Satlantic Data logger. It writes data to file in Satlantic format.
+    Rotates files automatically based on timestamp. The write method is thread safe.
+    """
+    def __init__(self, cfg):
+        # Load configuration
+        self.file_length: int = cfg['length'] * 60 if 'length' in cfg.keys() else 60 * 60 # seconds
+        self.filename_prefix: str = cfg['filename_prefix'] if 'filename_prefix' in cfg.keys() else os.uname()[1].replace('pysas', 'pySAS')
+        self.filename_ext: str = cfg['filename_ext'] if 'filename_ext' in cfg.keys() else 'raw'
+        self.path: str = cfg['path'] if 'path' in cfg.keys() else ''
+
+        # File Handler
+        self._file: IO = None
+        self._file_timestamp: Union[int, None] = None  # time.time
+
+        # Thread Safe Queue
+        self._queue: Queue = Queue()
+        self._thread: Thread = None
+        self._alive: bool = False
+
+        # Safe exit
+        atexit.register(self.close)
+
+    def _start_thread(self):
+        """
+        Start writing thread
+
+        :return:
+        """
+        if not self._alive:
+            self._alive = True
+            self._thread = Thread(name=repr(self), target=self._run)
+            self._thread.daemon = True
+            self._thread.start()
+
+    def _stop_thread(self):
+        """
+        Stop writing thread
+
+        :return:
+        """
+        if self._alive:
+            self._alive = False
+
+    def join(self, timeout=None):
+        """
+        Wait for thread writing data to join
+
+        :param timeout:
+        :return:
+        """
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def _run(self):
+        """
+        Write to file data queued in thread
+        :return:
+        """
+        while self._alive:
+            item = None
+            try:
+                data, timestamp = self._queue.get(timeout=1)
+            except Empty:
+                # Use timeout to exit thread in timely fashion when stop thread
+                continue
+            self._smart_open(timestamp)
+            self._file.write(data + pack_timestamp_satlantic(timestamp))
+
+    def _smart_open(self, timestamp: int):
+        """
+        Open file if not opened or time to roll to new file
+
+        :param timestamp: timestamp of data to write in file
+        :return:
+        """
+        # Open file if necessary
+        if self._file is None or self._file.closed or \
+                gmtime(self._file_timestamp).tm_mday != gmtime(timestamp).tm_mday or \
+                timestamp - self._file_timestamp >= self.file_length:
+            # Close previous file if open
+            if self._file and not self._file.closed:
+                self.close()
+            # Create new file
+            self.open(timestamp)
+
+    def open(self, timestamp: int):
+        """
+        Open file in which data is written
+
+        :param timestamp: timestamp used in filename
+        :return:
+        """
+        # Create directory
+        if not os.path.exists(self.path):
+            os.makedirs(self.path)
+        # Generate unique filename
+        filename = os.path.join(self.path, self.filename_prefix + '_' +
+                                strftime('%Y%m%d_%H%M%S', gmtime(timestamp)) + '.' + self.filename_ext)
+        suffix = 0
+        while os.path.exists(filename):
+            filename = os.path.join(self.path, self.filename_prefix + '_' +
+                                    strftime('%Y%m%d_%H%M%S', gmtime(timestamp)) + '_' + str(suffix) + self.filename_ext)
+            suffix += 1
+        # Create File
+        self._file = open(filename, 'wb')
+        # Time file open
+        self._file_timestamp = timestamp
+
+    def write(self, data: bytes, timestamp: int = None):
+        """
+        Queue data to write to file (thread safe)
+
+        :param data: data to write file (must be bytes)
+        :param timestamp: timestamp of data
+        :return:
+        """
+        if timestamp is None or isnan(timestamp):
+            timestamp = time()
+        self._queue.put((data, timestamp))
+        if not self._alive:
+            self._start_thread()
+
+    def close(self):
+        """
+        Close opened file, can be used to reset filename
+
+        :return:
+        """
+        if self._file:
+            self._file.close()
+        self._file_timestamp = None

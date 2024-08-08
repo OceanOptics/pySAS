@@ -1,0 +1,106 @@
+#sidebar {
+  text-align: center;
+  padding: 1rem 1rem;
+  background-color: #f8f9fa;
+}
+
+#sidebar #title {
+  text-align: center;
+  margin-bottom: 0;
+  margin-right: -3.0rem;
+}
+
+#sidebar-toggle {
+  display: none;
+}
+
+#collapse {
+  margin-top: 1rem;
+}
+
+/* add the three horizontal bars icon for the toggle */
+.navbar-toggler-icon {
+  background-image: url("data:image/svg+xml,%3csvg viewBox='0 0 30 30' xmlns='http://www.w3.org/2000/svg'%3e%3cpath stroke='rgba(0, 0, 0, 0.5)' stroke-width='2' stroke-linecap='round' stroke-miterlimit='10' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+#page-content {
+  /*padding: 2rem 1rem;*/
+  padding: 0rem 0.5rem;
+}
+
+@media (min-width: 48em) {
+  #sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 24rem;
+    text-align: left;
+    transition: margin 0.3s ease-in-out, padding 0.3s ease-in-out;
+    box-shadow: inset 1px 0 0 rgba(0, 0, 0, .1);
+  }
+
+  #sidebar #title {
+    margin-right: 0.25rem;
+  }
+
+  #sidebar-toggle {
+    display: inline-block;
+    position: relative;
+    top: 0;
+    right: 1rem;
+    transition: top 0.3s ease-in-out, right 0.3s ease-in-out;
+  }
+
+  /* add negative margin to sidebar to achieve the collapse */
+  #sidebar.collapsed {
+    margin-right: -20.5rem;
+    /*padding-left: 0.5rem;*/
+  }
+
+  /* move the sidebar toggle up and right to the top left corner */
+  #sidebar.collapsed #sidebar-toggle {
+    top: -1.5rem;
+    right: 20.5rem;
+  }
+
+  #sidebar.collapsed #title {
+    margin-right: -6rem;
+    margin-left: 6rem;
+  }
+
+  /* also adjust margin of page content */
+  #sidebar.collapsed ~ #page-content {
+    margin-right: 6.5rem;
+  }
+
+  /* move all contents of navbar other than header (containing toggle) further
+     off-screen */
+  #sidebar.collapsed > *:not(:first-child) {
+    margin-right: -6rem;
+    margin-left: 6rem;
+  }
+
+  /* reveal the blurb on a large screen */
+  #blurb {
+    display: block;
+  }
+
+  /* Hide the toggle on a large screen */
+  #navbar-toggle {
+    display: none;
+  }
+
+  #collapse {
+    display: block;
+  }
+
+  /* set margins of the main content so that it doesn't overlap the sidebar */
+  #page-content {
+    /*margin-right: 26rem;*/
+    /*margin-left: 2rem;*/
+    margin-right: 24rem;
+    margin-left: 0rem;
+    transition: margin-right 0.3s ease-in-out;
+  }
+}

@@ -15,7 +15,7 @@ from pySAS import WORLD_MAGNETIC_MODEL
 from datetime import datetime
 import pytz
 # from pysolar.time import leap_seconds_adjustments   # v0.7
-from pysolar.solartime import leap_seconds_adjustments  # v0.8
+from pysolar.solartime import leap_seconds_adjustments  # v0.8 - v0.11
 from pysolar.solar import get_azimuth, get_altitude
 
 from pySAS.log import SatlanticLogger
@@ -43,11 +43,6 @@ class Runner:
             self.__logger.critical('Unable to parse configuration file')
 
         # Runner states
-        tmp = self.cfg.get('Runner', 'operation_mode', fallback='auto')
-        if tmp not in ['auto', 'manual']:
-            self.__logger.warning('Invalid operation mode, fallback to auto')
-            tmp = 'auto'
-        self.operation_mode = tmp
         self.heading_source = self.cfg.get(self.__class__.__name__, 'heading_source', fallback='gps_relative_position')
         self.min_sun_elevation = self.cfg.getfloat(self.__class__.__name__, 'min_sun_elevation', fallback=20)
         self.start_sleep_timestamp = None
@@ -85,17 +80,27 @@ class Runner:
         self.indexing_table = IndexingTable(self.cfg)
         self.gps = GPS(self.cfg)
         self.hypersas = HyperSAS(self.cfg, self.data_logger)
-        self.es = None
+        self.es, self.imu = None, None
         if 'Es' in self.cfg.sections():
             self.es = Es(self.cfg, self.data_logger, parser=self.hypersas._parser)
         if 'IMU' in self.cfg.sections():
             self.imu = IMU(self.cfg, self.data_logger)
 
-        # Start if in auto_mode
-        if self.operation_mode == 'auto':
-            self.start('auto')
-        elif self.operation_mode == 'manual':
-            self.start('manual')
+        # Set operation mode and start thread
+        self.operation_mode = self.cfg.get('Runner', 'operation_mode', fallback='auto')
+
+    @property
+    def operation_mode(self) -> str:
+        return self._operation_mode
+
+    @operation_mode.setter
+    def operation_mode(self, value: str):
+        if value not in ['auto', 'manual']:
+            self.__logger.warning('Invalid operation mode, fallback to auto.')
+            value = 'auto'
+        self._operation_mode = value
+        self.stop()
+        self.start(value)
 
     def start(self, mode='auto'):
         if not self.alive:
@@ -364,10 +369,20 @@ class Runner:
         if self.interrupt_from_ui and self.cfg.getboolean('Runner', 'halt_host_on_exit', fallback=False):
             run(("shutdown", "-h", "now"))  # Must be authorized to run command
 
+    @property
+    def core_instrument_name(self) -> str:
+        name = 'HyperSAS'
+        if self.es:
+            name += '+Es'
+        if self.imu:
+            name += '+IMU'
+        return name
+
 
 # # Update leap_seconds_adjustments table from pysolar
 # pysolar_end_year = 2015  # v0.7
-pysolar_end_year = 2018  # v0.8
+# pysolar_end_year = 2018  # v0.8
+pysolar_end_year = 2023  # v0.11
 for y in range(pysolar_end_year, datetime.now().year + 2):
     leap_seconds_adjustments.append((0, 0))  # Not exact but fine for our application
 

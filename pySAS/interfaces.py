@@ -1,5 +1,3 @@
-import struct
-
 from serial import Serial, SerialException
 from timeit import default_timer
 from time import sleep, time
@@ -99,6 +97,7 @@ class IndexingTable:
         self.rotation_delay = 0.1331 * 2  # sec (start and stop)
         # Variables for UI
         self.alive = False
+        self.busy = False
         self.stalled = False
         self.position = float('nan')
         self.packet_received = float('nan')
@@ -106,21 +105,25 @@ class IndexingTable:
         atexit.register(self.stop)
 
     def start(self):
-        if not self.alive:
-            self.__logger.debug('start')
-            self._relay.on()
-            sleep(self.COMMAND_EXECUTION_TIME)
-            try:
-                self._serial.open()
-            except SerialException as e:
-                self.__logger.critical(e)
-                self._relay.off()
-                return False
-            self.set_configuration()
-            self.alive = True
-            self.get_stall_flag()
-            self.get_position()
-            return True
+        try:
+            self.busy = True
+            if not self.alive:
+                self.__logger.debug('start')
+                self._relay.on()
+                sleep(self.COMMAND_EXECUTION_TIME)
+                try:
+                    self._serial.open()
+                except SerialException as e:
+                    self.__logger.critical(e)
+                    self._relay.off()
+                    return False
+                self.set_configuration()
+                self.alive = True
+                self.get_stall_flag()
+                self.get_position()
+                return True
+        finally:
+            self.busy = False
 
     def set_configuration(self):
         self._serial.write(b'\x03')  # ctrl+c for resetting motor  # TODO Might Loose zero position due to that
@@ -316,23 +319,27 @@ class IndexingTable:
             return None
 
     def stop(self):
-        self.__logger.debug('stop')
-        if self.alive:
-            # Get stall flag (and reset if necessary)
-            self.get_stall_flag()
-            if self.stalled is not None: # Can read stall flag and communicate
-                if self.stalled:
-                    self.reset_stall_flag()
-                # Move indexing table back to 0
-                self.set_position(0, check_stall_flag=True)
-            # Stop serial connection
-            if hasattr(self._serial, 'cancel_read'):
-                self._serial.cancel_read()
-            if self._serial.is_open:
-                self._serial.close()
-            # Stop Power
-            self._relay.off()
-            self.alive = False
+        try:
+            self.busy = True
+            self.__logger.debug('stop')
+            if self.alive:
+                # Get stall flag (and reset if necessary)
+                self.get_stall_flag()
+                if self.stalled is not None: # Can read stall flag and communicate
+                    if self.stalled:
+                        self.reset_stall_flag()
+                    # Move indexing table back to 0
+                    self.set_position(0, check_stall_flag=True)
+                # Stop serial connection
+                if hasattr(self._serial, 'cancel_read'):
+                    self._serial.cancel_read()
+                if self._serial.is_open:
+                    self._serial.close()
+                # Stop Power
+                self._relay.off()
+                self.alive = False
+        finally:
+            self.busy = False
 
 
 class Sensor:
@@ -388,42 +395,51 @@ class Sensor:
         # Thread
         self._thread = None
         self.alive = False
+        self.busy = False
         # Register methods to execute at exit as cannot use __del__ as logging is already off-loaded
         atexit.register(self.stop)
 
     def start(self):
-        if not self.alive:
-            self.__logger.debug('start')
-            if self._relay is not None:
-                self._relay.on()
-            sleep(0.5)  # Leave time for sensor to turn on
-            try:
-                self._serial.open()
-            except SerialException as e:
-                self.__logger.critical(e)
+        try:
+            self.busy = True
+            if not self.alive:
+                self.__logger.debug('start')
                 if self._relay is not None:
-                    self._relay.off()
-                return
-            self.alive = True
-            self._thread = Thread(name=self.__class__.__name__, target=self.run)
-            self._thread.daemon = True
-            self._thread.start()
+                    self._relay.on()
+                sleep(0.5)  # Leave time for sensor to turn on
+                try:
+                    self._serial.open()
+                except SerialException as e:
+                    self.__logger.critical(e)
+                    if self._relay is not None:
+                        self._relay.off()
+                    return
+                self.alive = True
+                self._thread = Thread(name=self.__class__.__name__, target=self.run)
+                self._thread.daemon = True
+                self._thread.start()
+        finally:
+            self.busy = False
 
     def stop(self, from_thread=False):
-        self.__logger.debug('stop')
-        if self.alive:
-            self.alive = False
-            if hasattr(self._serial, 'cancel_read'):
-                self._serial.cancel_read()
-            # TODO Find elegant way to immediatly stop thread as slow down user interface when switching from auto to manual mode (timeout in serial won't do it as use serial.cancel_read)
-            if not from_thread:
-                self._thread.join(2)
-                if self._thread.is_alive():
-                    self.__logger.error('Thread did not join.')
-            self._serial.close()
-            if self._relay is not None:
-                self._relay.off()
-            self._data_logger.close()  # Required to start new log_data file when instrument restart
+        try:
+            self.busy = True
+            self.__logger.debug('stop')
+            if self.alive:
+                self.alive = False
+                if hasattr(self._serial, 'cancel_read'):
+                    self._serial.cancel_read()
+                # TODO Find elegant way to immediatly stop thread as slow down user interface when switching from auto to manual mode (timeout in serial won't do it as use serial.cancel_read)
+                if not from_thread:
+                    self._thread.join(2)
+                    if self._thread.is_alive():
+                        self.__logger.error('Thread did not join.')
+                self._serial.close()
+                if self._relay is not None:
+                    self._relay.off()
+                self._data_logger.close()  # Required to start new log_data file when instrument restart
+        finally:
+            self.busy = False
 
 
 class GPS(Sensor):
@@ -877,6 +893,7 @@ class HyperOCR(Sensor):
             self.packet_THS_parsed = float('nan')
 
     def start(self):
+        self.busy = True
         if not self._parser.cal:
             self.__logger.critical('A calibration file is required for the system to work. '
                                    'Please set a calibration file using the button "Select or Upload" under '

@@ -268,7 +268,7 @@ class IndexingTable:
 
     def reset_position_zero(self):
         if not self.alive:
-            self.__logger.error('reset_position_zero: unable, not alive')
+            self.__logger.critical('reset_position_zero: unable, not alive')
             return
         self.__logger.warning('reset_position_zero: reset zero')
         self._serial.write(bytes(self.REGISTRATOR + 'p=0' + self.TERMINATOR, self.ENCODING))
@@ -276,7 +276,7 @@ class IndexingTable:
 
     def reset_stall_flag(self):
         if not self.alive:
-            self.__logger.error('reset_stall_flag: unable, not alive')
+            self.__logger.critical('reset_stall_flag: unable, not alive')
             return
         self.__logger.warning('reset_stall_flag: reset stall flag')
         self._serial.write(bytes(self.REGISTRATOR + 'st=0' + self.TERMINATOR, self.ENCODING))

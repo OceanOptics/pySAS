@@ -8,7 +8,7 @@ import traceback
 from geomag.geomag import GeoMag
 import configparser
 
-__version__ = '0.3.14'
+__version__ = '1.0.0'
 
 # Setup logging
 LOGGING_LEVEL = logging.DEBUG

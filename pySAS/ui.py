@@ -349,7 +349,7 @@ def set_tower_orientation(value):
               Input('status_refresh_interval', 'n_intervals'))
 def get_tower_orientation(_):
     if runner.indexing_table.alive:
-        return f'Tower {runner.indexing_table.position}°' # if not isnan(runner.indexing_table.position) else 'Tower'
+        return f'Tower {runner.indexing_table.position:.1f}°' # if not isnan(runner.indexing_table.position) else 'Tower'
     raise PreventUpdate
 
 
@@ -418,7 +418,7 @@ settings_modal = dbc.Modal([
             dbc.Col(
                 dbc.RadioItems(id='select_device_file', labelCheckedStyle={"color": "green"},
                                options=['Device 1', 'Device 2', 'Device 3']),
-                class_name="mb-3", width=6, sm=6, xs=12,
+                width=6, sm=6, xs=12,
             ),
             dbc.Col(
                 dcc.Upload(
@@ -426,8 +426,10 @@ settings_modal = dbc.Modal([
                         'Drag and Drop or ', html.A('Select Device Files', style={'color': '#007bff', 'cursor': 'pointer'})
                     ]), style={'padding': '40px 30px', 'borderWidth': '1px', 'borderStyle': 'dashed',
                                'borderRadius': '5px', 'textAlign': 'center'}, className='m-1',
-                ), class_name='mb-3', width=6, sm=6, xs=12,
-            )
+                ), width=6, sm=6, xs=12,
+            ),
+            dbc.FormText('Updating calibration file requires you to reload page in web browser.',
+                         color='muted', class_name='mb-3'),
         ]),
     ]),
     dbc.ModalFooter([

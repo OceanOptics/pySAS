@@ -18,11 +18,9 @@ echo "Instal RPi specific python package"
 pip3 install rpi.gpio
 
 echo "Download pySAS"
-echo "GitHub Token to access repo:"
-read token
-curl -H "Authorization: token $token" -L  https://api.github.com/repos/doizuc/pySAS/zipball > master.zip
+curl -L  https://github.com/OceanOptics/pySAS/archive/refs/heads/master.zip > master.zip
 unzip master.zip
-cd doizuc-pySAS-*
+cd pySAS-master
 
 echo "Install pySAS"
 pip3 install -r requirements.txt

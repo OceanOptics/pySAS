@@ -26,7 +26,7 @@ pysolar_end_year = 2020  # v0.9
 for y in range(pysolar_end_year, datetime.now().year + 2):
     leap_seconds_adjustments.append((0, 0))
 
-__version__ = '1.0.1'
+__version__ = '1.0.2'
 logger = logging.getLogger('prepSAS')
 
 # Load NOAA World Magnetic Model
@@ -246,7 +246,7 @@ class Converter:
                         ignore_index=True)
         idx = idx.sort_values(by='datetime')
         idx.ig = idx.ig.fillna(method='ffill', limit=15)
-        idx.it = idx.it.fillna(method='ffill')
+        idx.it = idx.it.fillna(method='ffill', limit=120)
         idx.dropna(inplace=True)
         idx.ig = idx.ig.astype(int, copy=False)
         idx.it = idx.it.astype(int, copy=False)

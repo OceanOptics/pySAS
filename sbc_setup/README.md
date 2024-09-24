@@ -72,6 +72,11 @@ To clone the SD card to a new one, use the following command. This will create a
 	diskutil list # find the disk number of the SD card
 	sudo dd bs=4M if=/dev/disk2 of=pySAS-v1.0.0-`date +%Y%m%d`.img
 
+Set file system in read-write mode: connect pins 39 (GND) and 40 (GPIO21).
+Boot RPi.
 Change the hostname with the command `sudo raspi-config` > network options > set hostname to pysas### with ### the serial number (e.g. pysas004).
 Use script `5_external-drive.sh` to adjust the UUID of the external drive.
 Use part of script `6_pySAS.sh` to download configuration files and copy them to the external drive.
+Shutdown the RPi.
+Disconnect jumper between pins 39 and 40.
+Boot RPi, and enjoy pySAS.

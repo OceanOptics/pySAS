@@ -1,11 +1,16 @@
+from functools import reduce
+from operator import xor
+
 from serial import Serial, SerialException
 from timeit import default_timer
 from time import sleep, time
 from datetime import datetime
-from math import isnan
+from math import isnan, floor
 from threading import Thread, Lock
 import logging
 from struct import unpack_from
+
+from pySAS import WORLD_MAGNETIC_MODEL
 from pySAS.log import Log, LogBinary, pack_timestamp_satlantic, SatlanticLogger
 from gpiozero import OutputDevice
 from gpiozero.pins.mock import MockFactory  # required for virtual hardware
@@ -444,39 +449,44 @@ class Sensor:
 
 class GPS(Sensor):
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, data_logger=None):
         super().__init__(cfg)
         self.__logger = logging.getLogger(self.__class__.__name__)  # Need to recall logger as it's private
 
         # Update loggers
-        self._data_logger = Log({'filename_prefix': self.__class__.__name__,
-                                 'path': cfg.get(self.__class__.__name__, 'path_to_data',
-                                                 fallback=os.path.join(os.path.dirname(__file__), 'data')),
-                                 'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
-                                 'variable_names': ['gps_datetime', 'datetime_accuracy', 'datetime_valid',
-                                                     'heading', 'heading_accuracy', 'heading_valid',
-                                                     'heading_motion', 'heading_vehicle',
-                                                     'heading_vehicle_accuracy', 'heading_vehicle_valid',
-                                                     'speed', 'speed_accuracy',
-                                                     'latitude', 'longitude', 'horizontal_accuracy',
-                                                     'altitude','altitude_accuracy',
-                                                     'fix_ok', 'fix_type', 'last_packet'],
-                                 'variable_units': ['yyyy-mm-dd HH:MM:SS.us', 'us', 'bool',
-                                                    'deg', 'deg', 'bool',
-                                                    'deg', 'deg', 'deg', 'bool',
-                                                    'm/s ground', 'm/s',
-                                                    'deg N', 'deg E', 'm', 'm MSL', 'm',
-                                                    'bool',
-                                                    '0: no_fix; 1: DR; 2: 2D-fix; 3: 3D-fix; 4: GNSS+DR; 5: time_only',
-                                                    'name'],
-                                 'variable_precision': ['%s', '%d', '%s',
-                                                        '%.5f', '%.5f', '%s',
-                                                        '%.5f', '%.5f', '%.5f', '%s',
-                                                        '%.3f', '%.3f',
-                                                        '%.7f', '%.7f', '%.3f', '%.3f', '%.3f',
-                                                        '%s', '%d', '%s']})
+        if data_logger is None:
+            self._data_logger = Log({'filename_prefix': self.__class__.__name__,
+                                     'path': cfg.get(self.__class__.__name__, 'path_to_data',
+                                                     fallback=os.path.join(os.path.dirname(__file__), 'data')),
+                                     'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
+                                     'variable_names': ['gps_datetime', 'datetime_accuracy', 'datetime_valid',
+                                                         'heading', 'heading_accuracy', 'heading_valid',
+                                                         'heading_motion', 'heading_vehicle',
+                                                         'heading_vehicle_accuracy', 'heading_vehicle_valid',
+                                                         'speed', 'speed_accuracy',
+                                                         'latitude', 'longitude', 'horizontal_accuracy',
+                                                         'altitude','altitude_accuracy',
+                                                         'fix_ok', 'fix_type', 'last_packet'],
+                                     'variable_units': ['yyyy-mm-dd HH:MM:SS.us', 'us', 'bool',
+                                                        'deg', 'deg', 'bool',
+                                                        'deg', 'deg', 'deg', 'bool',
+                                                        'm/s ground', 'm/s',
+                                                        'deg N', 'deg E', 'm', 'm MSL', 'm',
+                                                        'bool',
+                                                        '0: no_fix; 1: DR; 2: 2D-fix; 3: 3D-fix; 4: GNSS+DR; 5: time_only',
+                                                        'name'],
+                                     'variable_precision': ['%s', '%d', '%s',
+                                                            '%.5f', '%.5f', '%s',
+                                                            '%.5f', '%.5f', '%.5f', '%s',
+                                                            '%.3f', '%.3f',
+                                                            '%.7f', '%.7f', '%.3f', '%.3f', '%.3f',
+                                                            '%s', '%d', '%s']})
+        else:
+            self._data_logger = data_logger
         self._data_logger_lock = Lock()
         self._log_data = False
+        self.decimate = cfg.getint(self.__class__.__name__, 'decimate', fallback=2)
+        self.counter = 0
         self._gps_orientation_on_ship = cfg.getint(self.__class__.__name__, 'orientation', fallback=0)
         self._parser = UBXParser([NAV_ARDUSIMPLE])
         self.packet_pvt_received = float('nan')
@@ -593,20 +603,53 @@ class GPS(Sensor):
 
         # Write parsed data
         if self._log_data:
-            if self._data_logger_lock.acquire(timeout=0.5):  # Need in case stop logging
-                try:
-                    self._data_logger.write([self.datetime.strftime('%Y/%m/%d %H:%M:%S.%f'),
-                                             self.datetime_accuracy, self.datetime_valid,
-                                             self.heading, self.heading_accuracy, self.heading_valid,
-                                             self.heading_motion, self.heading_vehicle,
-                                             self.heading_vehicle_accuracy, self.heading_vehicle_valid,
-                                             self.speed, self.speed_accuracy,
-                                             self.latitude, self.longitude, self.horizontal_accuracy,
-                                             self.altitude, self.altitude_accuracy, self.fix_ok, self.fix_type, packet[1]], timestamp)
-                finally:
-                    self._data_logger_lock.release()
-            else:
-                self.__logger.error('unable to acquire data_logger to write data')
+            self.counter += 1
+            if not self.counter % self.decimate:
+                if self._data_logger_lock.acquire(timeout=0.5):  # Need in case stop logging
+                    try:
+                            if isinstance(self._data_logger, Log):
+                                data = self.format_as_list(packet[1])
+                            else:  # Assume Satlantic Logger
+                                data = self.format_data_as_gprmc()
+                            self._data_logger.write(data, timestamp)
+                    finally:
+                        self._data_logger_lock.release()
+                else:
+                    self.__logger.error('unable to acquire data_logger to write data')
+
+    def format_as_list(self, packet_type):
+        return [self.datetime.strftime('%Y/%m/%d %H:%M:%S.%f'),
+                self.datetime_accuracy, self.datetime_valid,
+                self.heading, self.heading_accuracy, self.heading_valid,
+                self.heading_motion, self.heading_vehicle,
+                self.heading_vehicle_accuracy, self.heading_vehicle_valid,
+                self.speed, self.speed_accuracy,
+                self.latitude, self.longitude, self.horizontal_accuracy,
+                self.altitude, self.altitude_accuracy, self.fix_ok, self.fix_type, packet_type]
+
+    def format_data_as_gprmc(self):
+        # Format following NMEA0184 GPRMC format
+        hhmmss = self.datetime.strftime('%H%M%S')
+        valid = 'A' if self.datetime_valid and self.fix_ok else 'V'
+        lat_dd = floor(abs(self.latitude))
+        lat_mm = f'{((abs(self.latitude) - lat_dd) * 60):07.4f}'
+        lat_dd = f'{lat_dd:02.0f}'
+        lat_hm = 'S' if self.latitude < 0 else 'N'
+        lon_ddd = floor(abs(self.longitude))
+        lon_mm = f'{((abs(self.longitude) - lon_ddd) * 60):07.4f}'
+        lon_ddd = f'{lon_ddd:03.0f}'
+        lon_hm = 'W' if self.longitude < 0 else 'E'
+        speed = f'{self.speed * 1.94384:05.1f}'  # Convert from m/s to knots
+        course = f'{self.heading_motion:05.1f}'
+        ddmmyy = self.datetime.strftime('%d%m%y')
+        mag_var = WORLD_MAGNETIC_MODEL.GeoMag(self.latitude, self.longitude,
+                                              self.altitude * 3.2808399, self.datetime.date()).dec
+        mag_var_hm = 'W' if mag_var < 0 else 'E'
+        mag_var =f'{abs(mag_var):05.1f}'
+        frame = (f'$GPRMC,{hhmmss},{valid},{lat_dd}{lat_mm},{lat_hm},{lon_ddd}{lon_mm},{lon_hm},'
+                 f'{speed},{course},{ddmmyy},{mag_var},{mag_var_hm}')
+        checksum = f'*{hex(reduce(xor, map(ord, frame[1:])))[2:]}\r\n'
+        return (frame + checksum).encode('ascii')
 
 
 class IMU(Sensor):

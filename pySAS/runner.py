@@ -78,7 +78,7 @@ class Runner:
 
         # Controllers & Sensors
         self.indexing_table = IndexingTable(self.cfg)
-        self.gps = GPS(self.cfg)
+        self.gps = GPS(self.cfg, self.data_logger)
         self.hypersas = HyperSAS(self.cfg, self.data_logger)
         self.es, self.imu = None, None
         if 'Es' in self.cfg.sections():
@@ -206,9 +206,7 @@ class Runner:
                                 if flag_no_position:
                                     flag_no_position = False
                     # Log Tower and Ship headings and status
-                    # TODO Find way to log data in manual mode
                     self.data_logger.write(*self.make_umtwr_frame())
-
             except Exception as e:
                 self.__logger.critical(e)
 
@@ -223,8 +221,11 @@ class Runner:
             try:
                 # Do things only if HyperSAS is measuring
                 if not self.hypersas.alive:
+                    self.gps.stop_logging()
                     self._wait(iteration_timestamp)
                     continue
+                # Turn on GPS logging (step does nothing if already on)
+                self.gps.start_logging()
                 # Get Sun Position (requires gps)
                 self.get_sun_position()
                 # Write Tower Data (requires gps, sun position, and tower position)

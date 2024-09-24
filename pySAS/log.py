@@ -51,7 +51,7 @@ class Log:
         suffix = 0
         while os.path.exists(filename):
             filename = os.path.join(self.path, self.filename_prefix + '_' +
-                                    strftime('%Y%m%d_%H%M%S', gmtime(timestamp)) + '_' + str(suffix) + self.FILE_EXT)
+                                    strftime('%Y%m%d_%H%M%S', gmtime(timestamp)) + '_' + str(suffix) + '.' + self.FILE_EXT)
             suffix += 1
         # Create File
         self._file = open(filename, self.FILE_MODE)
@@ -252,7 +252,7 @@ class SatlanticLogger:
         suffix = 0
         while os.path.exists(filename):
             filename = os.path.join(self.path, self.filename_prefix + '_' +
-                                    strftime('%Y%m%d_%H%M%S', gmtime(timestamp)) + '_' + str(suffix) + self.filename_ext)
+                                    strftime('%Y%m%d_%H%M%S', gmtime(timestamp)) + '_' + str(suffix) + '.' + self.filename_ext)
             suffix += 1
         # Create File
         self._file = open(filename, 'wb')

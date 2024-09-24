@@ -66,3 +66,11 @@ Setup pySAS by running the script `6_pySAS.sh`. At the time of setup Raspbian Bu
 ### Set system in read only mode
 Set the SD Card in read-only to prevent any software corruption in case of unexpected shutdown. Run the script `7_read-only.sh` and enable boot-time read/write jumper on GPIO port 21. On current versions of pySAS the GPIO-halt utility and kernel panic watchdog were not enabled.
 
+### Alternative is to clone SD Card
+To clone the SD card to a new one, use the following command. This will create an image of the SD card on the computer. The image can then be copied to a new SD card.
+
+	diskutil list # find the disk number of the SD card
+	sudo dd bs=4M if=/dev/disk2 of=pySAS-v1.0.0-`date +%Y%m%d`.img
+
+Use script `5_external-drive.sh` to mount the adjust the UUID of the external drive.
+Use part of script `6_pySAS.sh` to download configuration files and copy them to the external drive.

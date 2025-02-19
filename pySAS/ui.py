@@ -574,6 +574,8 @@ def write_file(filename, content):
 
 def get_device_file_options(and_current=True):
     path_to_device_files = runner.cfg.get('HyperSAS', 'path_to_device_files')
+    if not os.path.isdir(path_to_device_files):
+        os.mkdir(path_to_device_files)
     # Get device file options
     device_file_list = [{'label': f, 'value': f} for f in os.listdir(path_to_device_files)
                         if os.path.isfile(os.path.join(path_to_device_files, f)) and f[-4:] == '.sip']
@@ -584,8 +586,6 @@ def get_device_file_options(and_current=True):
     if not and_current:
         return device_file_list
     # Get device file used
-    if not os.path.isdir(path_to_device_files):
-        os.mkdir(path_to_device_files)
     try:
         # current_device_file = f'select_device_file-{os.path.basename(runner.hypersas._parser_device_file)}'
         if os.path.dirname(runner.hypersas._parser_device_file) == path_to_device_files:
@@ -917,7 +917,7 @@ fig.update_layout(
     xaxis=dict(title=dict(text='Wavelength (nm)'), exponentformat='power', showgrid=True),
     yaxis=dict(title=dict(text='Radiance (&mu;W/cm<sup>2</sup>/nm/sr)'), showgrid=True, exponentformat='power'),
     yaxis2=dict(title=dict(text='Irradiance (&mu;W/cm<sup>2</sup>/nm)'),
-                titlefont_color='orange', tickfont_color='orange',
+                title_font_color='orange', tickfont_color='orange',
                 side="right", anchor="x", overlaying="y")
 )
 fig_spectrum = fig
@@ -1001,7 +1001,7 @@ fig.update_layout(
     yaxis=dict(title=dict(text='Tilt | Roll (&deg;)'), showgrid=True, exponentformat='power',
                zeroline=True, zerolinecolor='black', zerolinewidth=2),
     yaxis2=dict(title=dict(text='Irradiance (&mu;W/cm<sup>2</sup>/nm)'),
-                titlefont_color='orange', tickfont_color='orange',
+                title_font_color='orange', tickfont_color='orange',
                 side="right", anchor="x", overlaying="y")
 )
 fig_timeseries = fig

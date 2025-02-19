@@ -1,49 +1,74 @@
 Setup Raspberry Pi
 ==================
 
-### Copy image to SD card
-Download the latest version of Raspian OS and copy it to the sd card. A reminder of the command for macOS is below. Detailled instructions are available on the Raspberry Pi website. The OS version installed at time of writting was Buster (2020-08-20).
+# Installation from Scratch
+## Copy image to SD card
+Prepare an SD card with Raspberry Pi imager. At the time of writing (2025-02-19) Bookworm was installed.
 
-	diskutil list
-	diskutil unmountDisk /dev/disk2
-	sudo dd bs=1m if=2020-08-20-raspios-buster-armhf-lite.img of=/dev/rdisk2; sync
-	diskutil unmountDisk /dev/disk2
+  - Device: Raspberry Pi 3 (compatible with 3B or 3B+)
+  - Choose OS: Raspberry Pi OS (other) > Raspberry Pi OS Lite (64-bit) 
+  - Choose storage: SD Card of your choice
+  - Next > Edit Settings:
+    - Set hostname to pysas### with ### the serial number (e.g. pysas005)
+    - Set username (default is misclab for pysas) and password
+    - Set Wireless LAN (optional, convenient to connect over ssh after)
+    - Set locale settings:
+      - Timezone: Etc/UTC
+      - Keyboard: us
+    - Tab Services: enable SSH
+    - -> Save > Yes > Yes
+
+## First boot
+Insert SD Card and power RPi. Connect to RPi over ssh or with a keyboard and monitor (requires plugging the monitor and keyboard before powering the RPi). Make sure your RPi is connected to the internet, preferably via an ethernet cable as the RPi WiFi will be configured to a hotspot.
+
+The first step to configure your Raspbrry Pi (rpi) is to run `sudo raspi-config` and set up the following options:
+  - Localisation Options:
+    - change local to en_US.UTF-8
+    - change WLAN Country to US
+  - Interface Options:
+    - Set Serial Port to:
+      - Enable login shell: No
+      - Enable serial port hardware: Yes
 
 
-### First boot
-The first step to configure your Raspbrry Pi (rpi) is to run `sudo raspi-config` and setup the following options:
-	+ localisation options:
-		+ change local to us_US.UTF-8
-		+ change keyboard layout to US
-		+ change time zone to UTC
-		+ change WLAN Country to US
-	+ interface enable ssh
-	+ network options set hostname to pysas### with ### the serial number (e.g. pysas003)
+Download the pySAS repository and make configuration scripts executable.
 
+	sudo apt install -y git
+	git clone https://github.com/OceanOptics/pySAS.git
+	cd pySAS
+	chmod 744 sbc_setup/*.sh
 
-### Secure Pi
-First update the raspberry pi.
+Run configuration scripts (answer yes when prompted by scripts).
 
-	sudo apt update
-	sudo apt full-upgrade
-	sudo reboot
+	sudo su
+	./sbc_setup/1_secure.sh
+	./sbc_setup/2_wifi-hotspot.sh
+	./sbc_setup/3_external-drive.sh  # See section below if external drive is not formated in ext4
+	./sbc_setup/4_pysas.sh  # Must be run from the pySAS directory
 
-Using another computer on the same local network copy the folder sbc_setup to the Raspberry Pi /tmp folder with an ftp client. Swith to root user (`sudo su`). Run the secure script `bash 1_secure.sh`. Logout and re-login as misclab, with the password defined while running the secure script. Now delete the user pi.
+Check that everything run and then set the boot partition in read-only (next section) to prevent any software corruption in case of unexpected shutdown.
+
+## Set boot partition in read-only
+Read-only mode is set through the raspi-config utility. Note that data from pySAS will be stored on an external drive, which stays in read-write mode.
+
+    sudo raspi-config
+
+Navigate down to `Performance Options` > `Overlay File System`. Select `Yes` to both the enable and write-protect questions.
+It may take a minute or more while the system works, this is normal. Tab to the “Finish” button and reboot when prompted.
+After reboot, the system will be in read-only mode.
+
+To temporarily restore Read/Write mode enter command:
+
+    sudo mount -o remount,rw /boot
 	
-	sudo pkill -u pi
-	sudo deluser -remove-home pi
+Reboot system to restore read-only state.
 
-Note that ufw seems to pose problem with the WiFi hotspot, hence this software was removed from the installation.
+Reference: [Adafruit](https://learn.adafruit.com/read-only-raspberry-pi)
 
-
-### Set Wifi Hotspot
-Run the script `3_wifi-hotspot.sh` as root. The pySAS wifi SSID is its hostname (e.g. pysas003) and the password is `Phyt0plankt0n!`.
-
-
-### Set external drive
+## Set external drive
 An external drive is needed to store the data from pySAS as the SD card is set in read-only mode.
 
-Partition and format the external drive in journaled ext4 following this steps. First find the disk to format:
+Partition and format the external drive in journaled ext4 following these steps. First find the disk to format:
 
 	sudo fdisk -l
 
@@ -51,32 +76,37 @@ Partition the disk with the fsdisk utility.
 
 	sudo fdisk /dev/sda
 
-Use the formating utility as follow: create a new partiiton table with `g`, create a new partition with `n` leave default parameters, and write partition to disk with `w`.
+Use the formating utility as follows: create a new partition table with `g`, create a new partition with `n` leave default parameters, and write partition to disk with `w`.
 
 Format the new partition:
 
-	sudo mkfs -t ext4 /dev/sda1*
+	sudo mkfs.ext4 /dev/sda1
 
-Then run the script `5_external-drive.sh` to mount the disk at set permissions.
+Then run the script `3_external-drive.sh` to mount the disk at set permissions.
 
-### Setup pySAS Software
-Setup pySAS by running the script `6_pySAS.sh`. At the time of setup Raspbian Buster carried python3.7 which is supported by pySAS and the packaged its based on.
+# Installation from pySAS Image
+Image can be obtained from another pySAS (see section Clone SD Card)
 
+### Set SD from Image
+Boot RPi and temporarily set the system in read/write mode (it will reset after reboot).
 
-### Set system in read only mode
-Set the SD Card in read-only to prevent any software corruption in case of unexpected shutdown. Run the script `7_read-only.sh` and enable boot-time read/write jumper on GPIO port 21. On current versions of pySAS the GPIO-halt utility and kernel panic watchdog were not enabled.
+    sudo mount -o remount,rw /boot
 
-### Alternative is to clone SD Card
+Change the hostname with the command `sudo raspi-config` > network options > set hostname to pysas### with ### the serial number (e.g. pysas004).
+Use the script `2_wifi-hotspot.sh` to update the Wi-Fi hotspot name.
+Use the script `3_external-drive.sh` to adjust the UUID of the external drive.
+Download the configuration file from this repository and copy them to the external drive:
+    
+    cp pySAS/pysas_cfg.ini /mnt/data_disk/pysas_cfg.ini
+    sed -i "s/ui_update_cfg = False/ui_update_cfg = True/" /mnt/data_disk/pysas_cfg.ini
+    sed -i "/^sip/d" /mnt/data_disk/pysas_cfg.ini
+    cp /mnt/data_disk/pysas_cfg.ini /mnt/data_disk/pysas_cfg_backup.ini
+
+Reboot the RPi.
+Enjoy pySAS.
+
+### Clone SD Card to Share Image
 To clone the SD card to a new one, use the following command. This will create an image of the SD card on the computer. The image can then be copied to a new SD card.
 
 	diskutil list # find the disk number of the SD card
 	sudo dd bs=4M if=/dev/disk2 of=pySAS-v1.0.0-`date +%Y%m%d`.img
-
-Set file system in read-write mode: connect pins 39 (GND) and 40 (GPIO21).
-Boot RPi.
-Change the hostname with the command `sudo raspi-config` > network options > set hostname to pysas### with ### the serial number (e.g. pysas004).
-Use script `5_external-drive.sh` to adjust the UUID of the external drive.
-Use part of script `6_pySAS.sh` to download configuration files and copy them to the external drive.
-Shutdown the RPi.
-Disconnect jumper between pins 39 and 40.
-Boot RPi, and enjoy pySAS.

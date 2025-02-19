@@ -11,14 +11,8 @@ echo "Secure"
 echo "======"
 echo "Source: https://www.raspberrypi.org/documentation/configuration/security.md"
 
-echo
-echo "Add User misclab"
-echo "----------------"
-adduser misclab
-usermod -a -G adm,dialout,cdrom,sudo,audio,video,plugdev,games,users,input,netdev,gpio,i2c,spi misclab
-
 echo "Make sudo require password"
-sed -i 's/pi/misclab/' /etc/sudoers.d/010_pi-nopasswd
+#sed -i 's/pi/misclab/' /etc/sudoers.d/010_pi-nopasswd
 sed -i 's/NOPASSWD/PASSWD/' /etc/sudoers.d/010_pi-nopasswd
 
 # echo "Delete user pi (warning regarding the group pi can be safely ignored)"
@@ -31,12 +25,14 @@ echo "---------------------------"
 apt update
 apt full-upgrade
 
+# Prevents hotspot from working
 # echo
 # echo "Setup firewall"
 # echo "--------------"
 # echo "open: 22 (ssh/tcp) and 8050 (pySAS)"
 # apt install -y ufw
 # ufw limit ssh/tcp
+# ufw allow 8050
 # ufw enable
 
 echo
@@ -51,24 +47,10 @@ read -r -d '' CFG <<- EOM
 	enabled  = true
 	port     = ssh
 	filter   = sshd
-	logpath  = /var/log/auth.log
+	backend  = systemd
 	maxretry = 5
 	bantime = -1
 
 EOM
 echo "$CFG" >> /etc/fail2ban/jail.local 
 service fail2ban restart
-
-
-read -r -d '' MSG <<- EOM
-	
-	Please logout and log back in as user misclab.
-	Then delete user pi as follow.
-
-		pkill -u pi
-		deluser -remove-home pi
-
-	Warning regarding the group pi can be safely ignored.
-
-EOM
-echo "$MSG"

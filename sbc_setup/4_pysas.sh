@@ -9,25 +9,19 @@ echo
 echo "Install pySAS"
 echo "============="
 
-echo "Install pip3"
-sudo apt install -y python3-pip
-echo "Install numpy (as version installed with pip3 doesn't work)"
-sudo apt install -y python3-numpy
-
-echo "Instal RPi specific python package"
-pip3 install rpi.gpio
-
-echo "Download pySAS"
-curl -L  https://github.com/OceanOptics/pySAS/archive/refs/heads/master.zip > master.zip
-unzip master.zip
-cd pySAS-master
+echo "Install python3 package with apt"
+# apt's version of plotly is not up to date hence install directly in venv
+apt install -y python3-pip python3-numpy python3-serial python3-rpi.gpio python3-gpiozero
 
 echo "Install pySAS"
-pip3 install -r requirements.txt
 cp -r pySAS /usr/local/bin/
-rm /usr/local/bin/pySAS/pysas_cfg.ini
-# python3.8 setup.py install
-# Copy configuration file and update settings
+python3 -m venv --system-site-packages /usr/local/bin/pySAS/venv
+source /usr/local/bin/pySAS/venv/bin/activate
+pip3 install -r requirements.txt
+deactivate
+
+echo "Copy configuration files and update settings"
+rm /usr/local/bin/pySAS/pysas_cfg.ini  # Remove to prevent confusion as not used
 cp pySAS/pysas_cfg.ini /mnt/data_disk/pysas_cfg.ini
 sed -i "s/ui_update_cfg = False/ui_update_cfg = True/" /mnt/data_disk/pysas_cfg.ini
 sed -i "/^sip/d" /mnt/data_disk/pysas_cfg.ini
@@ -56,6 +50,7 @@ read -r -d '' CFG <<- EOM
 	WantedBy=multi-user.target
 EOM
 echo "$CFG" >> /etc/systemd/system/pysas.service
+systemctl daemon-reload
 systemctl enable pysas.service
 
 # Grant permission to all users to shutdown command
@@ -66,6 +61,6 @@ chmod 4755 /sbin/shutdown
 echo "Authorize date"
 chmod 4755 /bin/date
 
-# Open firewall
+# Open firewall (already done in 1_secure.sh)
 # echo "Open firewall port 8050"
 # ufw allow 8050

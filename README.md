@@ -22,9 +22,9 @@ pySAS system's main parts:
 To build your own system the complete bill of material (BOM) is available at [docs/pySAS.BOM.xlsx](https://github.com/OceanOptics/pySAS/blob/master/docs/pySAS.BOM.xlsx). Drawings of the custom-made tower are available at [docs/pySAS.TowerDrawings.R2.pdf](https://github.com/OceanOptics/pySAS/blob/master/docs/pySAS.TowerDrawings.R2.pdf). Illustrations to make the controller box are available at [docs/pySAS.ControllerBoxAssembly.pdf](https://github.com/OceanOptics/pySAS/blob/master/docs/pySAS.ControllerBoxAssembly.pdf). The user guide is shared at [docs/pySAS.UserGuide.pdf](https://github.com/OceanOptics/pySAS/blob/master/docs/pySAS.UserGuide.pdf).
 
 ## Software Configuration
-The installation process requires to configure the host computer (e.g. RaspberryPi 3B+) and installing pySAS software as a service on the computer. Scripts and explanations are provided in the folder `sbc_setup`.
+The installation process requires to configure the host computer (e.g. RaspberryPi 3B) and installing pySAS software as a service on the computer. Scripts and explanations are provided in the folder `sbc_setup`.
 
-The RTK GPS modules (simpleRTK2B+heading kit) should be configured in MovingBase and Rover at 1Hz. See the tutorial from the manufacturer for instructions [ArduSimple](https://www.ardusimple.com/configuration-files/).
+The RTK GPS modules (simpleRTK2B+heading kit) should be configured in MovingBase and Rover at 1Hz. See the [tutorial](https://www.ardusimple.com/configuration-files/) from the manufacturer for instructions to upload [configuration files](https://www.ardusimple.com/simplertk2heading-hookup-guide/).
 
 Recommended pySAS configuration:
   + the zenith and nadir angle from the Li and Lt sensors must be the same, comprise between 30 and 50 degrees, ideally 40 degrees (HyperSAS Manual and Mobley 1999)

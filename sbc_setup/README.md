@@ -82,7 +82,20 @@ Format the new partition:
 
 	sudo mkfs.ext4 /dev/sda1
 
-Then run the script `3_external-drive.sh` to mount the disk at set permissions.
+Then run the script `3_external-drive.sh` to mount the disk at set permissions. 
+
+If you enable overlayfs without replacing `overlayroot=tmpfs` to `overlayroot=tmpfs:recurse=0` in `/boot/firmware/cmdline.txt`, then you need to switch back to read-write mode with raspi-config:
+
+1. Disable overlayfs in raspi-config
+2. Reboot
+3. Disable write-only boot partition
+4. Reboot
+5. Turn on the overlay in raspi-config
+6. Edit `/boot/firmware/cmdline.txt` replacing `overlayroot=tmpfs` to `overlayroot=tmpfs:recurse=0`
+7. Apply changes `sudo update-initramfs -u` and reboot (note that despite error message system is in read-only mode)
+
+Source: [StackExchange](https://raspberrypi.stackexchange.com/questions/144661/enabling-overlayfs-makes-external-drives-read-only)
+
 
 # Installation from pySAS Image
 Image can be obtained from another pySAS (see section Clone SD Card)
@@ -102,6 +115,7 @@ Download the configuration file from this repository and copy them to the extern
     sed -i "/^sip/d" /mnt/data_disk/pysas_cfg.ini
     cp /mnt/data_disk/pysas_cfg.ini /mnt/data_disk/pysas_cfg_backup.ini
 
+Optional expand the file system with `sudo raspi-config` > Advanced Options > Expand Filesystem.
 Reboot the RPi.
 Enjoy pySAS.
 

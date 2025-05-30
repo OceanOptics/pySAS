@@ -6,6 +6,10 @@ from time import gmtime, strftime, time
 from struct import pack
 import atexit
 from typing import Union, IO
+import logging
+
+
+eng_log = logging.getLogger(__name__)
 
 
 class Log:
@@ -55,6 +59,7 @@ class Log:
             suffix += 1
         # Create File
         self._file = open(filename, self.FILE_MODE)
+        eng_log.info('Opened file %s', self._file.name)
         # Write header (only if has variable names)
         if self.variable_names:
             self._file.write(
@@ -93,6 +98,7 @@ class Log:
     def close(self):
         if self._file:
             self._file.close()
+            eng_log.info('Closed file %s', self._file.name)
         self._file_timestamp = None
 
     def __del__(self):
@@ -256,6 +262,7 @@ class SatlanticLogger:
             suffix += 1
         # Create File
         self._file = open(filename, 'wb')
+        eng_log.info('Opened file %s', self._file.name)
         # Time file open
         self._file_timestamp = timestamp
 
@@ -281,4 +288,5 @@ class SatlanticLogger:
         """
         if self._file:
             self._file.close()
+            eng_log.info('Closed file %s', self._file.name)
         self._file_timestamp = None

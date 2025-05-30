@@ -100,6 +100,11 @@ class Converter:
                     except (StructError):
                         # logger.debug(f'TimeError: {frame}')
                         d[i], t[i] = 0, 0
+                # Clear frames with invalid data
+                for i, f in enumerate(frames):
+                    if f.startswith(b'UMTWR') and len(f.strip(b'\r\n').split(b'\r\n')) > 1:
+                        logger.warning(f'{os.path.basename(filename)}: UMTWR frame with multiple lines, dropping extra data. {f}')
+                        frames[i] = f.split(b'\r\n')[0] + b'\r\n'
                 df = pd.DataFrame({'d': d, 't': t})
                 df['dt'] = df.d.astype(str) + df.t.astype(str).apply(lambda y: y.zfill(9)) + '000'
                 timestamps = pd.to_datetime(df['dt'], format='%Y%j%H%M%S%f', utc=True, errors='coerce')

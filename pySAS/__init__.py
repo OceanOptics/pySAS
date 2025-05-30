@@ -8,10 +8,10 @@ import traceback
 from geomag.geomag import GeoMag
 import configparser
 
-__version__ = '1.0.0'
+__version__ = '1.0.1'
 
 # Setup logging
-LOGGING_LEVEL = logging.DEBUG
+LOGGING_LEVEL = logging.INFO
 logging.basicConfig(level=LOGGING_LEVEL)
 root_logger = logging.getLogger()   # Get root logger
 
@@ -62,4 +62,18 @@ logging.getLogger('werkzeug').setLevel(logging.WARNING)
 # Load NOAA World Magnetic Model
 WORLD_MAGNETIC_MODEL = GeoMag()
 
-root_logger.debug('pySAS v%s initialized' % __version__)
+root_logger.info('pySAS v%s initialized' % __version__)
+
+# Pretty print config
+root_logger.info('Loaded configuration: %s' % CFG_FILENAME)
+def pretty_print(d, indent=0):
+    for key, value in d.items():
+        if key.startswith('_'):
+            continue
+        if isinstance(value, dict) or isinstance(value, configparser.SectionProxy):
+            root_logger.info('\t' * indent + str(key))
+            pretty_print(value, indent+1)
+        else:
+            root_logger.info('\t' * indent + str(key) + ': ' + str(value))
+
+pretty_print(cfg, 1)

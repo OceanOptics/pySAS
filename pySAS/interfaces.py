@@ -199,7 +199,7 @@ class IndexingTable:
             try:
                 pos_steps = int(msg.decode(self.ENCODING, self.UNICODE_HANDLING).strip())
                 self.position = pos_steps / self.GEAR_BOX_RATIO
-                self.__logger.info(f'get_position: {self.position:.2f}')
+                self.__logger.debug(f'get_position: {self.position:.2f}')
             except ValueError or UnicodeDecodeError:
                 self.__logger.error('unable to parse position')
                 self.position = float('nan')
@@ -450,39 +450,40 @@ class Sensor:
 class GPS(Sensor):
 
     def __init__(self, cfg, data_logger=None):
-        super().__init__(cfg)
+        # Set default logger if needed
+        if data_logger is None:
+            data_logger = Log({
+                'filename_prefix': self.__class__.__name__,
+                'path': cfg.get(self.__class__.__name__, 'path_to_data',
+                                fallback=os.path.join(os.path.dirname(__file__), 'data')),
+                'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
+                'variable_names': ['gps_datetime', 'datetime_accuracy', 'datetime_valid',
+                                   'heading', 'heading_accuracy', 'heading_valid',
+                                   'heading_motion', 'heading_vehicle',
+                                   'heading_vehicle_accuracy', 'heading_vehicle_valid',
+                                   'speed', 'speed_accuracy',
+                                   'latitude', 'longitude', 'horizontal_accuracy',
+                                   'altitude', 'altitude_accuracy',
+                                   'fix_ok', 'fix_type', 'last_packet'],
+                'variable_units': ['yyyy-mm-dd HH:MM:SS.us', 'us', 'bool',
+                                   'deg', 'deg', 'bool',
+                                   'deg', 'deg', 'deg', 'bool',
+                                   'm/s ground', 'm/s',
+                                   'deg N', 'deg E', 'm', 'm MSL', 'm',
+                                   'bool',
+                                   '0: no_fix; 1: DR; 2: 2D-fix; 3: 3D-fix; 4: GNSS+DR; 5: time_only',
+                                   'name'],
+                'variable_precision': ['%s', '%d', '%s',
+                                       '%.5f', '%.5f', '%s',
+                                       '%.5f', '%.5f', '%.5f', '%s',
+                                       '%.3f', '%.3f',
+                                       '%.7f', '%.7f', '%.3f', '%.3f', '%.3f',
+                                       '%s', '%d', '%s']
+            })
+        super().__init__(cfg, data_logger)
         self.__logger = logging.getLogger(self.__class__.__name__)  # Need to recall logger as it's private
 
-        # Update loggers
-        if data_logger is None:
-            self._data_logger = Log({'filename_prefix': self.__class__.__name__,
-                                     'path': cfg.get(self.__class__.__name__, 'path_to_data',
-                                                     fallback=os.path.join(os.path.dirname(__file__), 'data')),
-                                     'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60),
-                                     'variable_names': ['gps_datetime', 'datetime_accuracy', 'datetime_valid',
-                                                         'heading', 'heading_accuracy', 'heading_valid',
-                                                         'heading_motion', 'heading_vehicle',
-                                                         'heading_vehicle_accuracy', 'heading_vehicle_valid',
-                                                         'speed', 'speed_accuracy',
-                                                         'latitude', 'longitude', 'horizontal_accuracy',
-                                                         'altitude','altitude_accuracy',
-                                                         'fix_ok', 'fix_type', 'last_packet'],
-                                     'variable_units': ['yyyy-mm-dd HH:MM:SS.us', 'us', 'bool',
-                                                        'deg', 'deg', 'bool',
-                                                        'deg', 'deg', 'deg', 'bool',
-                                                        'm/s ground', 'm/s',
-                                                        'deg N', 'deg E', 'm', 'm MSL', 'm',
-                                                        'bool',
-                                                        '0: no_fix; 1: DR; 2: 2D-fix; 3: 3D-fix; 4: GNSS+DR; 5: time_only',
-                                                        'name'],
-                                     'variable_precision': ['%s', '%d', '%s',
-                                                            '%.5f', '%.5f', '%s',
-                                                            '%.5f', '%.5f', '%.5f', '%s',
-                                                            '%.3f', '%.3f',
-                                                            '%.7f', '%.7f', '%.3f', '%.3f', '%.3f',
-                                                            '%s', '%d', '%s']})
-        else:
-            self._data_logger = data_logger
+
         self._data_logger_lock = Lock()
         self._log_data = False
         self.decimate = cfg.getint(self.__class__.__name__, 'decimate', fallback=2)
@@ -737,7 +738,7 @@ class IMU(Sensor):
 
     def format_data_as_satths_ttcm(self):
         # Format following output of Satlantic Tilt/Heading Sensor in TTCM mode (SN0009)
-        frame = (f'SATTHS{self.serial_number:04d},{self.counter},{self.packet_received - self.t0:7.2f},'
+        frame = (f'SATTHS{self.serial_number:04d},{self.counter},{self.packet_received - self.t0:07.2f},'
                  f'$R{self.roll:.2f}P{self.pitch:.2f}'
                  f'T{0:.1f}'  # Internal Temperature (forced to 0)
                  f'X{self.x_accel:.5f}Y{self.y_accel:.5f}Z{self.z_accel:.5f}'  # Magnetic Field (replace by acceleration)
@@ -747,7 +748,7 @@ class IMU(Sensor):
 
     def format_data_as_satths(self):
         # Format following output of Satlantic Tilt/Heading Sensor of unit SN0045
-        return (f'SATTHS{self.serial_number:04d},{self.counter},{self.packet_received - self.t0:7.2f},'
+        return (f'SATTHS{self.serial_number:04d},{self.counter},{self.packet_received - self.t0:07.2f}'
                 f',{self.yaw:.1f},{self.pitch:.1f},{self.roll:.1f}\x0D\x0A').encode('ascii')
 
 

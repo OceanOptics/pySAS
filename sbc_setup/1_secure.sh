@@ -23,7 +23,7 @@ echo
 echo "Ensure latest security fix"
 echo "---------------------------"
 apt update
-apt full-upgrade
+apt full-upgrade -y
 
 # Prevents hotspot from working
 # echo

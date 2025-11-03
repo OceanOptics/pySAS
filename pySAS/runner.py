@@ -481,8 +481,9 @@ class AutoPilot:
         self.compass_zero = normalize_angle(cfg.getfloat(self.__class__.__name__, 'gps_orientation_on_ship', fallback=0))
         self.tower_zero = normalize_angle(cfg.getfloat(self.__class__.__name__, 'indexing_table_orientation_on_ship', fallback=0))
         self.tower_limits = [float('nan'), float('nan')]
-        self.set_tower_limits(cfg.get(self.__class__.__name__, 'valid_indexing_table_orientation_limits').replace('[', '').replace(']', '').split(','))
+        self.set_tower_limits(cfg.get(self.__class__.__name__, 'valid_indexing_table_orientation_limits').strip('[]').split(','))
         self.target = cfg.getfloat(self.__class__.__name__, 'optimal_angle_away_from_sun', fallback=135)
+        self.valid_target_limits = [normalize_angle(float(a)) for a in cfg.get(self.__class__.__name__, 'valid_angle_away_from_sun_limits', fallback='[90, 135]').strip('[]').split(',')]
 
         self.min_dist_delta = cfg.getfloat(self.__class__.__name__, 'minimum_distance_delta', fallback=3)  # degrees
         self.selected_option = None
@@ -518,9 +519,27 @@ class AutoPilot:
                 valid_options += 2
 
         if not valid_options:
-            # No option
+            # No option, look for non-optimal target (angle away from sun)
             self.selected_option = None
-            return float('nan')
+            if self.valid_target_limits[0] == self.valid_target_limits[1]:
+                return float('nan')  # No valid target available
+            # Compute aiming limits
+            aiming_heading_limits = [[sun_azimuth + self.valid_target_limits[0], sun_azimuth + self.valid_target_limits[1]],
+                                     [sun_azimuth - self.valid_target_limits[1], sun_azimuth - self.valid_target_limits[0]]]
+            tower_orientation_options_limits = [[normalize_angle(aiming_heading_limits[0][0] - tower_zero_heading),
+                                                 normalize_angle(aiming_heading_limits[0][1] - tower_zero_heading)],
+                                                [normalize_angle(aiming_heading_limits[1][0] - tower_zero_heading),
+                                                 normalize_angle(aiming_heading_limits[1][1] - tower_zero_heading)]]
+            sub_target = float('nan')
+            for t in self.tower_limits:
+                if ((self.valid_target_limits[0] < self.valid_target_limits[1] and
+                     (tower_orientation_options_limits[0][0] <= t <= tower_orientation_options_limits[0][1] or
+                      tower_orientation_options_limits[1][0] <= t <= tower_orientation_options_limits[1][1])) or
+                    (self.valid_target_limits[0] > self.valid_target_limits[1] and  # Reverse limits
+                     (t >= tower_orientation_options_limits[0][0] or tower_orientation_options_limits[0][1] >= t or
+                      t >= tower_orientation_options_limits[1][0] or tower_orientation_options_limits[1][1] >= t))):
+                    sub_target = t
+            return [sub_target, *tower_orientation_options, *tower_orientation_options_limits]
         elif valid_options < 3:
             # One option
             self.selected_option = valid_options - 1

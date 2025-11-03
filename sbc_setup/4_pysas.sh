@@ -39,7 +39,7 @@ read -r -d '' CFG <<- EOM
 
 	[Service]
 	Environment=PYTHONPATH=/usr/local/bin
-	ExecStart=/usr/bin/python3 -u -m pySAS /mnt/data_disk/pysas_cfg.ini
+	ExecStart=/usr/local/bin/pySAS/venv/bin/python3 -u -m pySAS /mnt/data_disk/pysas_cfg.ini
 	WorkingDirectory=/mnt/data_disk
 	StandardOutput=inherit
 	StandardError=inherit

@@ -41,6 +41,17 @@ def get_serial_instance(interface, cfg):
     return s
 
 
+class NoRelay():
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def on(self):
+        pass
+
+    def off(self):
+        pass
+
+
 class IndexingTable:
     """
     Python Interface to custom made indexing table. The indexing table is made of a Lexium MDrive LMD M85 which is
@@ -94,9 +105,14 @@ class IndexingTable:
                                        active_high=False, initial_value=False)
         except BadPinFactory:
             # No physical gpio library installed, likely running on development platform
-            self.__logger.warning('Loading GPIO Mock Factory')
+            self.__logger.warning('Loading GPIO Mock Factory.')
             self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
                                        active_high=False, initial_value=False, pin_factory=MockFactory())
+        except NoOptionError:
+            # No gpio pin specified hence no relay control
+            self.__logger.warning(f'No relay for {self.__class__.__name__}.')
+            self._relay = NoRelay()
+
         # Configuration variables specific to motor
         self.rotation_ispeed = 0.02778    # sec / deg
         self.rotation_delay = 0.1331 * 2  # sec (start and stop)
@@ -369,7 +385,7 @@ class Sensor:
         cls._instances.append(super(Sensor, cls).__new__(cls))
         return cls._instances[-1]
 
-    def __init__(self, cfg, data_logger=None, enable_gpio=True):
+    def __init__(self, cfg, data_logger=None):
         # Prevent re-init if asking for second instance
         if hasattr(self, '_serial_port'):
             self.__logger.debug(self.__class__.__name__ + ' already initialized for port ' + self._serial_port)
@@ -385,18 +401,19 @@ class Sensor:
         # Serial
         self._serial = get_serial_instance(self.__class__.__name__, cfg)
         # GPIO
-        if enable_gpio:
-            try:
-                # Try to load physical pin factory (Factory())
-                self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
-                                           active_high=False, initial_value=False)
-            except BadPinFactory:
-                # No physical gpio library installed, likely running on development platform
-                self.__logger.warning('Loading GPIO Mock Factory')
-                self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
-                                           active_high=False, initial_value=False, pin_factory=MockFactory())
-        else:
-            self._relay = None
+        try:
+            # Try to load physical pin factory (Factory())
+            self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
+                                       active_high=False, initial_value=False)
+        except BadPinFactory:
+            # No physical gpio library installed, likely running on development platform
+            self.__logger.warning('Loading GPIO Mock Factory.')
+            self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
+                                       active_high=False, initial_value=False, pin_factory=MockFactory())
+        except NoOptionError:
+            # No gpio pin specified hence no relay control
+            self.__logger.warning(f'No relay for {self.__class__.__name__}.')
+            self._relay = NoRelay()
         # Thread
         self._thread = None
         self.alive = False
@@ -409,15 +426,13 @@ class Sensor:
             self.busy = True
             if not self.alive:
                 self.__logger.debug('start')
-                if self._relay is not None:
-                    self._relay.on()
+                self._relay.on()
                 sleep(0.5)  # Leave time for sensor to turn on
                 try:
                     self._serial.open()
                 except SerialException as e:
                     self.__logger.critical(e)
-                    if self._relay is not None:
-                        self._relay.off()
+                    self._relay.off()
                     return
                 self.alive = True
                 self._thread = Thread(name=self.__class__.__name__, target=self.run)
@@ -440,8 +455,7 @@ class Sensor:
                     if self._thread.is_alive():
                         self.__logger.error('Thread did not join.')
                 self._serial.close()
-                if self._relay is not None:
-                    self._relay.off()
+                self._relay.off()
                 self._data_logger.close()  # Required to start new log_data file when instrument restart
         finally:
             self.busy = False
@@ -659,7 +673,7 @@ class IMU(Sensor):
     """
 
     def __init__(self, cfg, data_logger=None):
-        super().__init__(cfg, data_logger, enable_gpio=False)
+        super().__init__(cfg, data_logger)
         self.__logger = logging.getLogger(self.__class__.__name__)  # Need to recall logger as it's private
         # Get configuration
         self.serial_number = cfg.getint(self.__class__.__name__, 'serial_number', fallback=1500)
@@ -969,10 +983,9 @@ class HyperOCR(Sensor):
                         self.logger.error(f'No data received during the past {timestamp - data_received:.2f} seconds')
                         data_timeout_flag = True
                         # Power cycle sensor
-                        if self._relay is not None:
-                            self._relay.off()
-                            sleep(1)
-                            self._relay.on()
+                        self._relay.off()
+                        sleep(1)
+                        self._relay.on()
             except SerialException as e:
                 self.__logger.error(e)
                 self.stop(from_thread=True)

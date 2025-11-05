@@ -213,12 +213,12 @@ def set_hypersas_switch(switch):
         runner.hypersas.busy = True
         if switch:
             logger.debug('set_hypersas_switch: start')
-            runner.gps.start_logging()
             if runner.imu:
                 runner.imu.start()
             if runner.es:
                 runner.es.start()
             runner.hypersas.start()
+            runner.gps.start_logging()  # Must start after hypersas otherwise Runner.run_manual could stop GPS logging
         else:
             logger.debug('set_hypersas_switch: stop')
             runner.hypersas.stop()
@@ -362,8 +362,14 @@ settings_modal = dbc.Modal([
     dbc.ModalHeader(dbc.ModalTitle("pySAS Settings")),
     dbc.ModalBody([
         html.Div([
-            dbc.Alert("Settings alert.", id='settings_modal_alert', is_open=False, color="primary", dismissable=False)
-        ], className='mb-3'),
+            dbc.Label("GPS Orientation", html_for="gps_orientation"),
+            dbc.InputGroup([
+                dbc.Input(id='gps_orientation', type='number', min=-180, max=360, step=1, class_name='text-end'),
+                dbc.InputGroupText("°")
+            ]),
+            dbc.FormText('Difference in heading between the GPS and the ship. '
+                         'For details, see schematics inside the pySAS controller box.', color='muted'),
+        ], className="mb-3"),
         dbc.Row([
             dbc.Label("Tower Orientation Range", html_for="tower_valid_orientation_prt"),
             dbc.Col(
@@ -380,19 +386,46 @@ settings_modal = dbc.Modal([
                     dbc.InputGroupText("°")
                 ]), width=6, sm=6, xs=12,
             ),
-            dbc.FormText('Orientation in which pySAS can take measurements. '
+            dbc.FormText('The orientation range within which pySAS can collect valid measurements. '
+                         'The orientation range is with respect to the tower zero, '
+                         'which is commonly aligned with the ship heading. '
                          'Outside this range the pySAS would be pointing at the ship or its wake. '
                          'The shaded area on the system orientation chart depicts the no measurements range.',
                          color='muted'),
         ], className="mb-3"),
         html.Div([
-            dbc.Label("GPS Orientation", html_for="gps_orientation"),
+            dbc.Label("Optimal Sensors\' Azimuth", html_for="optimal_sensors_azimuth"),
             dbc.InputGroup([
-                dbc.Input(id='gps_orientation', type='number', min=-180, max=360, step=1, class_name='text-end'),
+                dbc.Input(id='optimal_sensors_azimuth', type='number', min=-180, max=360, step=1, class_name='text-end'),
                 dbc.InputGroupText("°")
             ]),
-            dbc.FormText('Difference in heading between the GPS and the ship. '
-                         'For details, see schematics inside the pySAS controller box.', color='muted'),
+            dbc.FormText('Optimal sensors\' azimuth with respect to the sun. '
+                         'In other words, the horizontal angle between the sun and the sensors\' viewing direction (Lt & Li). '
+                         'Typically between 90° and 135°. Mobley 1999 recommends 135°.', color='muted'),
+        ], className="mb-3"),
+        dbc.Row([
+            dbc.Label("Sensors\' Azimuth Limits", html_for="sensors_azimuth_min"),
+            dbc.Col(
+                dbc.InputGroup([
+                    dbc.InputGroupText("Min"),
+                    dbc.Input(id='sensors_azimuth_min', type='number', min=-180, max=360, step=1, class_name='text-end'),
+                    dbc.InputGroupText("°")
+                ]), width=6, sm=6, xs=12,
+            ),
+            dbc.Col(
+                dbc.InputGroup([
+                    dbc.InputGroupText("Max"),
+                    dbc.Input(id='sensors_azimuth_max', type='number', min=-180, max=360, step=1, class_name='text-end'),
+                    dbc.InputGroupText("°")
+                ]), width=6, sm=6, xs=12,
+            ),
+            dbc.FormText('Acceptable range of sensors azimuth with respect to the sun for which pySAS can take measurements. '
+                         'If the optimal sensors azimuth can not be achieved, '
+                         'pySAS will set the tower to the closest viewing angle within the range specified. '
+                         'If no azimuth can be achieved within the specified range, '
+                         'pySAS will not record measurements (turn off radiometers and tower). '
+                         'Typical, sensor azimuth range is 90° to 135°.',
+                         color='muted'),
         ], className="mb-3"),
         html.Div([
             dbc.Label("Sun Elevation", html_for='min_sun_elevation'),
@@ -407,7 +440,7 @@ settings_modal = dbc.Modal([
         html.Div([
             dbc.Label("Refresh Period", html_for='refresh_period'),
             dbc.InputGroup([
-                dbc.Input(id='refresh_period', type='number', min=0, max=300, step=0.5),
+                dbc.Input(id='refresh_period', type='number', min=0.01, max=300, step=0.5),
                 dbc.InputGroupText("s")
             ]),
             dbc.FormText('Period at which adjust and log tower position. '
@@ -431,6 +464,9 @@ settings_modal = dbc.Modal([
             dbc.FormText('Updating calibration file requires you to reload page in web browser.',
                          color='muted', class_name='mb-3'),
         ]),
+        html.Div([
+            dbc.Alert("Settings alert.", id='settings_modal_alert', is_open=False, color="primary", dismissable=False)
+        ], className='mb-3'),
     ]),
     dbc.ModalFooter([
         dbc.Button("Cancel", id="settings_modal_cancel", color='secondary', n_clicks=0),
@@ -449,7 +485,10 @@ def toggle_settings_modal(open_modal, close_modal, is_open):
 
 
 @app.callback(Output('tower_valid_orientation_prt', 'value'), Output('tower_valid_orientation_stb', 'value'),
-              Output('gps_orientation', 'value'), Output('min_sun_elevation', 'value'),
+              Output('gps_orientation', 'value'),
+              Output('optimal_sensors_azimuth', 'value'),
+              Output('sensors_azimuth_min', 'value'), Output('sensors_azimuth_max', 'value'),
+              Output('min_sun_elevation', 'value'),
               Output('refresh_period', 'value'),
               Output('select_device_file', 'options'), Output('select_device_file', 'value'),
               Output('settings_modal_alert', 'color', allow_duplicate=True),
@@ -461,7 +500,9 @@ def get_settings(is_open):
     # Get device file used
     device_file_options, current_device_file = get_device_file_options()
     # Other parameters
-    return (*runner.pilot.tower_limits, runner.pilot.compass_zero, runner.min_sun_elevation, runner.refresh_delay,
+    return (*runner.pilot.tower_limits, runner.pilot.compass_zero,
+            runner.pilot.target, *runner.pilot.target_limits,
+            runner.min_sun_elevation, runner.refresh_delay,
             device_file_options, current_device_file, 'light', False)
 
 
@@ -471,21 +512,34 @@ def get_settings(is_open):
               Output('fig_timeseries_cache', 'data', allow_duplicate=True),
               Input('settings_modal_save', 'n_clicks'),
               State('tower_valid_orientation_prt', 'value'), State('tower_valid_orientation_stb', 'value'),
-              State('gps_orientation', 'value'), State('min_sun_elevation', 'value'),
+              State('gps_orientation', 'value'),
+              State('optimal_sensors_azimuth', 'value'),
+              State('sensors_azimuth_min', 'value'), State('sensors_azimuth_max', 'value'),
+              State('min_sun_elevation', 'value'),
               State('refresh_period', 'value'), State('select_device_file', 'value'),
               prevent_initial_call=True)
-def save_settings(save_click, prt, stb, gps, sun, period, device_file):
+def save_settings(save_click, prt, stb, gps, optimal_az, min_az, max_az, sun, period, device_file):
     if not save_click:
         raise PreventUpdate
+    # Reset figures cache
+    fig_spectrum_cache, fig_timeseries_cache = None, None
     # Check Input
-    if prt is None or stb is None or prt < -180 or prt > 360 or stb < -180 or stb > 360:
-        return True, 'Invalid tower orientation range. Acceptable range -180 to 360.', 'danger', 3600000
     if gps is None or gps < -180 or gps > 360:
-        return True, 'Invalid gps orientation. Acceptable range -180 to 360.', 'danger', 3600000
+        return True, 'Invalid gps orientation. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
+    if prt is None or stb is None or prt < -180 or prt > 360 or stb < -180 or stb > 360:
+        return True, 'Invalid tower orientation range. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
+    if optimal_az is None or optimal_az < -180 or sun > 360:
+        return True, 'Invalid optimal sensors\' azimuth. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
+    if min_az is None or max_az is None or min_az < -180 or min_az > 360 or max_az < -180 or max_az > 360:
+        return True, 'Invalid sensors\' azimuth limits. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
+    if min_az > max_az:
+        return True, 'Invalid sensors\' azimuth limits. Min should be lower than Max.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
+    if optimal_az < min_az or max_az < optimal_az:
+        return True, 'Optimal sensors\' azimuth is outside limits.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     if sun is None or sun < 0 or sun > 90:
-        return True, 'Invalid min sun elevation. Acceptable range 0 to 90.', 'danger', 3600000
+        return True, 'Invalid min sun elevation. Acceptable range 0 to 90.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     if period is None or period < 0.1 or period > 600:
-        return True, 'Invalid refresh period. Acceptable range 0.1 to 600.', 'danger', 3600000
+        return True, 'Invalid refresh period. Acceptable range 0.1 to 600.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     # Check Device File
     path_to_file = os.path.join(runner.cfg.get('HyperSAS', 'path_to_device_files'), device_file)
     if not (runner.hypersas._parser_device_file == path_to_file or
@@ -511,22 +565,24 @@ def save_settings(save_click, prt, stb, gps, sun, period, device_file):
         except BadZipFile as e:
             logger.warning('select_device_file: unable to load file')
             logger.warning(e)
-            return True, "Unable to import device file. " + str(e) + ' or sip file.', 'danger', 3600000
+            return True, "Unable to import device file. " + str(e) + ' or sip file.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
         except Exception as e:
             logger.warning('select_device_file: unable to load file')
             logger.warning(e)
-            return True, "Unable to import device file. " + str(e), 'danger', 3600000
+            return True, "Unable to import device file. " + str(e), 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     # Save Other settings
     runner.pilot.set_tower_limits([prt, stb])
     runner.set_cfg_variable('AutoPilot', 'valid_indexing_table_orientation_limits', [prt, stb])
+    runner.pilot.target = optimal_az
+    runner.set_cfg_variable('AutoPilot', 'optimal_angle_away_from_sun', optimal_az)
+    runner.pilot.set_target_limits([min_az, max_az])
+    runner.set_cfg_variable('AutoPilot', 'valid_angle_away_from_sun_limits', [min_az, max_az])
     runner.pilot.compass_zero = gps
     runner.set_cfg_variable('AutoPilot', 'gps_orientation_on_ship', gps)
     runner.min_sun_elevation = sun
     runner.set_cfg_variable('Runner', 'min_sun_elevation', sun)
     runner.refresh_delay = period
     runner.set_cfg_variable('Runner', 'refresh', period)
-    # Reset figures cache
-    fig_spectrum_cache, fig_timeseries_cache = {}, None
     return True, 'Settings saved.', 'success', 1500, fig_spectrum_cache, fig_timeseries_cache
 
 
@@ -853,7 +909,7 @@ def get_fig_system_orientation(_0, _1, _2):
     if timestamp - runner.ship_heading_timestamp < runner.DATA_EXPIRED_DELAY:
         ship = runner.ship_heading
         # Adjust Tower to ship referencial
-        tower = ship + tower
+        tower = ship - runner.pilot.tower_zero + tower
         # Adjust blind zone to ship referencial
         blind_zone_center = ship + blind_zone_center
     # Get sun
@@ -928,7 +984,7 @@ fig_spectrum = fig
               State('fig_spectrum_cache', 'data'), prevent_initial_call=True)
 def get_fig_spectrum(_, cache):
     fig = Patch()
-    if cache is None:
+    if not cache:
         cache = [False] * 3
     # Check alive
     if not runner.hypersas.alive:
@@ -1014,7 +1070,7 @@ def get_fig_timeseries(_, cache):
     fig = Patch()
     timestamp = time()
     max_points = [120, 120, 60, 60, 90]
-    if cache is None:
+    if not cache:
         count, last_timestamp = [0] * 5, [0] * 5
         for id in range(5):
             fig['data'][id]['x'] = []

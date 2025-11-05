@@ -1,7 +1,7 @@
 import os
 from math import isnan
 from queue import Queue, Empty
-from threading import Thread
+from threading import Thread, Lock
 from time import gmtime, strftime, time
 from struct import pack
 import atexit
@@ -166,15 +166,18 @@ class SatlanticLogger:
         self.filename_prefix: str = cfg['filename_prefix'] if 'filename_prefix' in cfg.keys() else os.uname()[1].replace('pysas', 'pySAS')
         self.filename_ext: str = cfg['filename_ext'] if 'filename_ext' in cfg.keys() else 'raw'
         self.path: str = cfg['path'] if 'path' in cfg.keys() else ''
+        self.reopen_delay: float = cfg['reopen_delay'] if 'reopen_delay' in cfg.keys() else 5.0  # seconds
 
         # File Handler
         self._file: IO = None
         self._file_timestamp: Union[int, None] = None  # time.time
+        self._file_closed_timestamp: Union[int, None] = None
 
         # Thread Safe Queue
         self._queue: Queue = Queue()
         self._thread: Thread = None
         self._alive: bool = False
+        self._lock: Lock = Lock()
 
         # Safe exit
         atexit.register(self.close)
@@ -222,6 +225,10 @@ class SatlanticLogger:
             except Empty:
                 # Use timeout to exit thread in timely fashion when stop thread
                 continue
+            if self._file_closed_timestamp is not None and timestamp - self._file_closed_timestamp < self.reopen_delay:
+                # Discard data older than last closed file
+                eng_log.debug(f'File recently closed, discarding data: {data[:10]} ...')
+                continue
             self._smart_open(timestamp)
             self._file.write(data + pack_timestamp_satlantic(timestamp))
 
@@ -232,19 +239,21 @@ class SatlanticLogger:
         :param timestamp: timestamp of data to write in file
         :return:
         """
-        # Open file if necessary
-        if self._file is None or self._file.closed or \
-                gmtime(self._file_timestamp).tm_mday != gmtime(timestamp).tm_mday or \
-                timestamp - self._file_timestamp >= self.file_length:
-            # Close previous file if open
-            if self._file and not self._file.closed:
-                self.close()
-            # Create new file
-            self.open(timestamp)
+        with self._lock:  # Blocking until lock available
+            # Open file if necessary
+            if self._file is None or self._file.closed or \
+                    gmtime(self._file_timestamp).tm_mday != gmtime(timestamp).tm_mday or \
+                    timestamp - self._file_timestamp >= self.file_length:
+                # Close previous file if open
+                if self._file and not self._file.closed:
+                    self.close()
+                # Create new file
+                self._open(timestamp)
 
-    def open(self, timestamp: int):
+    def _open(self, timestamp: int):
         """
         Open file in which data is written
+        Must use internal self._lock to ensure thread safety (typically taken care of in _smart_open)
 
         :param timestamp: timestamp used in filename
         :return:
@@ -265,6 +274,7 @@ class SatlanticLogger:
         eng_log.info('Opened file %s', self._file.name)
         # Time file open
         self._file_timestamp = timestamp
+        self._file_closed_timestamp = None
 
     def write(self, data: bytes, timestamp: int = None):
         """
@@ -286,7 +296,9 @@ class SatlanticLogger:
 
         :return:
         """
-        if self._file:
-            self._file.close()
-            eng_log.info('Closed file %s', self._file.name)
-        self._file_timestamp = None
+        with self._lock:  # Blocking until lock available
+            if self._file and not self._file.closed:
+                self._file.close()
+                self._file_closed_timestamp = time()
+                eng_log.info('Closed file %s', self._file.name)
+            self._file_timestamp = None

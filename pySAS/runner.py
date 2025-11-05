@@ -23,6 +23,7 @@ from pySAS.log import SatlanticLogger
 
 class Runner:
     DATA_EXPIRED_DELAY = 20  # seconds
+    WAKEUP_DELAY = 20  # seconds
     ASLEEP_DELAY = 120  # seconds
     ASLEEP_INTERRUPT = 120  # seconds
     HEADING_TOLERANCE = 0.2  # degrees ~ 111 motor steps
@@ -62,6 +63,7 @@ class Runner:
             'filename_prefix': self.cfg.get('DataLogger', 'filename_prefix', fallback=os.uname()[1].replace('pysas', 'pySAS')),
             'filename_ext': self.cfg.get('DataLogger', 'filename_ext', fallback='raw'),
             'path': self.cfg.get('DataLogger', 'path_to_data', fallback=os.path.join(os.path.dirname(__file__), 'data')),
+            'reopen_delay': self.cfg.getfloat('DataLogger', 'reopen_delay', fallback=5.0),
         })
 
         # Pilot
@@ -122,97 +124,95 @@ class Runner:
             # self.gps.stop()
 
     def run_auto(self):
-        flag_no_position = False
-        flag_stalled = False
+        flag_sun_pos, flag_sun_elev, flag_no_ship_heading, flag_no_position, flag_stalled = (
+            False, False, False, False, False)
         first_iteration = True
-        # Reset sleep mode if need to restart instruments
+        # Set asleep mode based on instruments alive status
         if self.indexing_table.alive and self.hypersas.alive:
             self.asleep = False
         else:
             self.asleep = True
+        # Main loop
         while self.alive:
             # Timer
             iteration_timestamp = time()
-
             try:
                 # Get Sun Position
                 if not self.get_sun_position():
+                    if not flag_sun_pos:
+                        self.__logger.info('No sun position.')
+                        flag_sun_pos = True
                     self._wait(iteration_timestamp)
                     continue
 
-                # Toggle Sleep Mode
-                if self.sun_elevation < self.min_sun_elevation:  # TODO Implement sleep when no position or stalled
-                    if not self.asleep:
-                        if not self.start_sleep_timestamp:
-                            self.start_sleep_timestamp = time()
-                        if time() - self.start_sleep_timestamp > self.ASLEEP_DELAY or first_iteration:
-                            self.__logger.info('fall asleep')
-                            self.indexing_table.stop()
-                            self.hypersas.stop()
-                            if self.es:
-                                self.es.stop()
-                            if self.imu:
-                                self.imu.stop()
-                            self.gps.stop_logging()
-                            self.asleep = True
-                        self.stop_sleep_timestamp = None
-                else:
+                # Switch operating mode: alseep, awake
+                if self.sun_elevation < self.min_sun_elevation:
+                    # Sun below minimum elevation, go to sleep
+                    self.go_to_sleep(first_iteration)
+                    # Super sleep in this case (it's night, so no need to wakeup for a while)
                     if self.asleep:
-                        if not self.stop_sleep_timestamp:
-                            self.stop_sleep_timestamp = time()
-                        if time() - self.stop_sleep_timestamp > self.ASLEEP_DELAY or first_iteration:
-                            self.__logger.info('waking up')
-                            if not self.internet and not self.hypersas.alive:
-                                self.get_time_sync()
-                            self.indexing_table.start()
-                            self.gps.start_logging()
-                            if self.es:
-                                self.es.start()
-                            if self.imu:
-                                self.imu.start()
-                            self.hypersas.start()
-                            self.asleep = False
-                    self.start_sleep_timestamp = None
-                if first_iteration:
-                    first_iteration = False
-                if self.asleep:
-                    sleep(self.ASLEEP_INTERRUPT)
-                    continue
-
-                # Get Heading
-                if not self.get_ship_heading():
-                    self._wait(iteration_timestamp)
-                    continue
-
-                if not isnan(self.sun_azimuth):
-                    # Compute aimed indexing table orientation
+                        if not flag_sun_elev:
+                            self.__logger.info(f'Sun below minimum elevation '
+                                               f'{self.sun_elevation:.1f} < {self.min_sun_elevation:.1f}.')
+                            flag_sun_elev = True
+                        t0 = time()
+                        while self.alive and time() - t0 < self.ASLEEP_INTERRUPT:
+                            sleep(1)
+                        continue  # Avoid self._wait as it would show warning
+                elif isnan(self.sun_azimuth):
+                    # Sun position not available, go to sleep
+                    self.go_to_sleep(first_iteration)
+                    if self.asleep and not flag_sun_pos:
+                        self.__logger.info('No sun position.')
+                        flag_sun_pos = True
+                else:
+                    flag_sun_elev, flag_sun_pos = False, False
+                    # Get heading
+                    if not self.get_ship_heading():
+                        if not flag_no_ship_heading:
+                            self.__logger.info('No ship heading.')
+                            flag_no_ship_heading = True
+                        self._wait(iteration_timestamp)
+                        continue
+                    flag_no_ship_heading = False
+                    # Compute target position for tower
                     aimed_indexing_table_orientation = self.pilot.steer(self.sun_azimuth, self.ship_heading)
                     if isnan(aimed_indexing_table_orientation):
+                        # No target position available, go to sleep
                         if not flag_no_position:
                             self.__logger.info('No orientation available.')
                             flag_no_position = True
+                        self.go_to_sleep(first_iteration)
+                        self._wait(iteration_timestamp)
+                        continue
+                    flag_no_position = False
+                    # Wake up system
+                    self.wakeup(first_iteration)
+                    if not self.indexing_table.alive:
+                        self._wait(iteration_timestamp)
+                        continue
+                    # Check tower if tower stalled
+                    if self.indexing_table.get_stall_flag():
+                        if not flag_stalled:
+                            self.__logger.warning('Indexing table stalled.')
+                            flag_stalled = True
                     else:
-                        # Update Tower
+                        # Set tower position
                         if abs(self.indexing_table.get_position() - aimed_indexing_table_orientation) \
                                 > self.HEADING_TOLERANCE:
-                            if self.indexing_table.get_stall_flag():
-                                if not flag_stalled:
-                                    self.__logger.warning('Indexing table stalled')
-                                    flag_stalled = True
-                            else:
-                                self.indexing_table.set_position(aimed_indexing_table_orientation)
-                                if flag_stalled:
-                                    flag_stalled = False
-                                if flag_no_position:
-                                    flag_no_position = False
+                            self.indexing_table.set_position(aimed_indexing_table_orientation)
+                        flag_stalled = False
                     # Log Tower and Ship headings and status
                     self.data_logger.write(*self.make_umtwr_frame())
             except Exception as e:
                 self.__logger.critical(e)
 
+            # Switch to True after first successful iteration
+            if first_iteration:
+                first_iteration = False
+
             # Wait before next iteration
-            if self.alive:
-                self._wait(iteration_timestamp)
+            self._wait(iteration_timestamp)
 
     def run_manual(self):
         while self.alive:
@@ -233,21 +233,74 @@ class Runner:
             except Exception as e:
                 self.__logger.critical(e)
             # Wait before next iteration
-            if self.alive:
-                self._wait(iteration_timestamp)
+            self._wait(iteration_timestamp)
 
     def _wait(self, start_iter):
-        delta = self.refresh_delay - (time() - start_iter)
-        if delta > 0:
-            if delta > 0.5:
-                start_sleep = time()
-                while time() - start_sleep < delta and self.alive:
-                    sleep(0.1)
+        if self.alive:
+            delta = self.refresh_delay - (time() - start_iter)
+            if delta > 0:
+                if delta > 0.5:
+                    start_sleep = time()
+                    while time() - start_sleep < delta and self.alive:
+                        sleep(0.1)
+                else:
+                    sleep(delta)
             else:
-                sleep(delta)
-        else:
-            self.__logger.warning('cannot keep up with refresh rate, slowing down')
-            sleep(1 + abs(self.refresh_delay))
+                self.__logger.warning('Cannot keep up with refresh rate, slowing down.')
+                sleep(1 + abs(self.refresh_delay))
+
+    def go_to_sleep(self, force=False):
+        """
+        Go to sleep, power off all instruments except GPS (needed for wake up, stop GPS logging)
+        Go to sleep after ASLEEP_DELAY seconds unless force is True
+
+        :param force: Force sleeping immediately
+        :return:
+        """
+        if not self.asleep:
+            if not self.start_sleep_timestamp:
+                self.start_sleep_timestamp = time()
+            if time() - self.start_sleep_timestamp > self.ASLEEP_DELAY or force:
+                self.__logger.info('Stop instruments.')
+                self.indexing_table.stop()
+                self.hypersas.stop()
+                if self.es:
+                    self.es.stop()
+                if self.imu:
+                    self.imu.stop()
+                self.gps.stop_logging()
+                self.asleep = True
+        # Reset wake-up timer if still asleep way passed wake-up delay
+        if (self.asleep and self.stop_sleep_timestamp and
+                time() - self.stop_sleep_timestamp > self.WAKEUP_DELAY + 10 * self.refresh_delay):
+            self.__logger.debug('Still sleepy, reset wake-up timer.')
+            self.stop_sleep_timestamp = None
+
+    def wakeup(self, force=False):
+        """
+        Wake up, power on and start logging data from all instruments.
+        Wake up after ASLEEP_DELAY seconds unless force is True
+
+        :param force: Force waking up immediately
+        :return:
+        """
+        if self.asleep:
+            if not self.stop_sleep_timestamp:
+                self.__logger.info('Waking up triggered ...')
+                self.stop_sleep_timestamp = time()
+            if time() - self.stop_sleep_timestamp > self.WAKEUP_DELAY or force:
+                self.__logger.info('Start instruments.')
+                if not self.internet and not self.hypersas.alive:
+                    self.get_time_sync()
+                self.indexing_table.start()
+                self.gps.start_logging()
+                if self.es:
+                    self.es.start()
+                if self.imu:
+                    self.imu.start()
+                self.hypersas.start()
+                self.asleep = False
+        self.start_sleep_timestamp = None  # Reset sleep timer, in any case to stay up for as long as possible
 
     def get_time_sync(self):
         """
@@ -483,13 +536,17 @@ class AutoPilot:
         self.tower_limits = [float('nan'), float('nan')]
         self.set_tower_limits(cfg.get(self.__class__.__name__, 'valid_indexing_table_orientation_limits').strip('[]').split(','))
         self.target = cfg.getfloat(self.__class__.__name__, 'optimal_angle_away_from_sun', fallback=135)
-        self.valid_target_limits = [normalize_angle(float(a)) for a in cfg.get(self.__class__.__name__, 'valid_angle_away_from_sun_limits', fallback='[90, 135]').strip('[]').split(',')]
+        self.target_limits = [float('nan'), float('nan')]
+        self.set_target_limits(cfg.get(self.__class__.__name__, 'valid_angle_away_from_sun_limits', fallback='[90, 135]').strip('[]').split(','))
 
         self.min_dist_delta = cfg.getfloat(self.__class__.__name__, 'minimum_distance_delta', fallback=3)  # degrees
         self.selected_option = None
 
     def set_tower_limits(self, limits):
         self.tower_limits = [normalize_angle(float(v)) for v in limits]
+
+    def set_target_limits(self, limits):
+        self.target_limits = [normalize_angle(float(v)) for v in limits]
 
     def steer(self, sun_azimuth, ship_heading):
         # Get both aimed heading options
@@ -521,25 +578,24 @@ class AutoPilot:
         if not valid_options:
             # No option, look for non-optimal target (angle away from sun)
             self.selected_option = None
-            if self.valid_target_limits[0] == self.valid_target_limits[1]:
+            if self.target_limits[0] == self.target_limits[1]:
                 return float('nan')  # No valid target available
             # Compute aiming limits
-            aiming_heading_limits = [[sun_azimuth + self.valid_target_limits[0], sun_azimuth + self.valid_target_limits[1]],
-                                     [sun_azimuth - self.valid_target_limits[1], sun_azimuth - self.valid_target_limits[0]]]
+            aiming_heading_limits = [[sun_azimuth + self.target_limits[0], sun_azimuth + self.target_limits[1]],
+                                     [sun_azimuth - self.target_limits[1], sun_azimuth - self.target_limits[0]]]
             tower_orientation_options_limits = [[normalize_angle(aiming_heading_limits[0][0] - tower_zero_heading),
                                                  normalize_angle(aiming_heading_limits[0][1] - tower_zero_heading)],
                                                 [normalize_angle(aiming_heading_limits[1][0] - tower_zero_heading),
                                                  normalize_angle(aiming_heading_limits[1][1] - tower_zero_heading)]]
-            sub_target = float('nan')
             for t in self.tower_limits:
-                if ((self.valid_target_limits[0] < self.valid_target_limits[1] and
+                if ((self.target_limits[0] < self.target_limits[1] and
                      (tower_orientation_options_limits[0][0] <= t <= tower_orientation_options_limits[0][1] or
                       tower_orientation_options_limits[1][0] <= t <= tower_orientation_options_limits[1][1])) or
-                    (self.valid_target_limits[0] > self.valid_target_limits[1] and  # Reverse limits
+                    (self.target_limits[0] > self.target_limits[1] and  # Reverse limits
                      (t >= tower_orientation_options_limits[0][0] or tower_orientation_options_limits[0][1] >= t or
                       t >= tower_orientation_options_limits[1][0] or tower_orientation_options_limits[1][1] >= t))):
-                    sub_target = t
-            return [sub_target, *tower_orientation_options, *tower_orientation_options_limits]
+                    return t
+            return float('nan')  # No valid target available
         elif valid_options < 3:
             # One option
             self.selected_option = valid_options - 1

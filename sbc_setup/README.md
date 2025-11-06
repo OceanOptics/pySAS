@@ -22,9 +22,13 @@ Prepare an SD card with Raspberry Pi imager. At the time of writing (2025-02-19)
 Insert SD Card and power RPi. Connect to RPi over ssh or with a keyboard and monitor (requires plugging the monitor and keyboard before powering the RPi). Make sure your RPi is connected to the internet, preferably via an ethernet cable as the RPi WiFi will be configured to a hotspot.
 
 The first step to configure your Raspbrry Pi (rpi) is to run `sudo raspi-config` and set up the following options:
+  - Advance Options:
+    - Expand Filesystem:
+      - Select Yes
   - Localisation Options:
     - change local to en_US.UTF-8
     - change WLAN Country to US
+    - change Timezone to Other/UTC
   - Interface Options:
     - Set Serial Port to:
       - Enable login shell: No
@@ -46,7 +50,10 @@ Run configuration scripts (answer yes when prompted by scripts).
 	./sbc_setup/3_external-drive.sh  # See section below if external drive is not formated in ext4
 	./sbc_setup/4_pysas.sh  # Must be run from the pySAS directory
 
-Check that everything run and then set the boot partition in read-only (next section) to prevent any software corruption in case of unexpected shutdown.
+Check that everything run, then delete temporary pySAS folder in home to avoid confusion in the future,
+and set the boot partition in read-only (next section) to prevent any software corruption in case of unexpected shutdown.
+
+    rm -r ~misclab/pySAS
 
 ## Set boot partition in read-only
 Read-only mode is set through the raspi-config utility. Note that data from pySAS will be stored on an external drive, which stays in read-write mode.
@@ -54,8 +61,15 @@ Read-only mode is set through the raspi-config utility. Note that data from pySA
     sudo raspi-config
 
 Navigate down to `Performance Options` > `Overlay File System`. Select `Yes` to both the enable and write-protect questions.
-It may take a minute or more while the system works, this is normal. Tab to the “Finish” button and reboot when prompted.
-After reboot, the system will be in read-only mode.
+It may take a minute or more while the system works, this is normal. Tab to the “Finish” button and do NOT reboot. 
+Edit the cmdline.txt file to prevent boot issues.
+
+    sudo nano /boot/firmware/cmdline.txt
+
+Find the line that contains `overlayroot=tmpfs` and change it to `overlayroot=tmpfs:recurse=0`. 
+Save and exit the file (Ctrl+X, Y, Enter). You can now reboot the system.
+
+After rebooting, the system will be in read-only mode.
 
 To temporarily restore Read/Write mode enter command:
 
@@ -63,7 +77,17 @@ To temporarily restore Read/Write mode enter command:
 	
 Reboot system to restore read-only state.
 
-Reference: [Adafruit](https://learn.adafruit.com/read-only-raspberry-pi)
+If you enable overlayfs without replacing `overlayroot=tmpfs` to `overlayroot=tmpfs:recurse=0` in `/boot/firmware/cmdline.txt`, then you need to switch back to read-write mode with raspi-config:
+
+1. Disable overlayfs in raspi-config
+2. Reboot
+3. Disable write-only boot partition
+4. Reboot
+5. Turn on the overlay in raspi-config
+6. Edit `/boot/firmware/cmdline.txt` replacing `overlayroot=tmpfs` to `overlayroot=tmpfs:recurse=0`
+7. Apply changes `sudo update-initramfs -u` and reboot (note that despite error message system is in read-only mode)
+
+References: [Adafruit](https://learn.adafruit.com/read-only-raspberry-pi), [StackExchange](https://raspberrypi.stackexchange.com/questions/144661/enabling-overlayfs-makes-external-drives-read-only), [GitHub](https://github.com/raspberrypi/bookworm-feedback/issues/137)
 
 ## Set external drive
 An external drive is needed to store the data from pySAS as the SD card is set in read-only mode.
@@ -82,20 +106,7 @@ Format the new partition:
 
 	sudo mkfs.ext4 /dev/sda1
 
-Then run the script `3_external-drive.sh` to mount the disk at set permissions. 
-
-If you enable overlayfs without replacing `overlayroot=tmpfs` to `overlayroot=tmpfs:recurse=0` in `/boot/firmware/cmdline.txt`, then you need to switch back to read-write mode with raspi-config:
-
-1. Disable overlayfs in raspi-config
-2. Reboot
-3. Disable write-only boot partition
-4. Reboot
-5. Turn on the overlay in raspi-config
-6. Edit `/boot/firmware/cmdline.txt` replacing `overlayroot=tmpfs` to `overlayroot=tmpfs:recurse=0`
-7. Apply changes `sudo update-initramfs -u` and reboot (note that despite error message system is in read-only mode)
-
-Source: [StackExchange](https://raspberrypi.stackexchange.com/questions/144661/enabling-overlayfs-makes-external-drives-read-only)
-
+Then run the script `3_external-drive.sh` to mount the disk at set permissions.
 
 # Installation from pySAS Image
 Image can be obtained from another pySAS (see section Clone SD Card)

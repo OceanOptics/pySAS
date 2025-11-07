@@ -191,6 +191,8 @@ class Runner:
                     if not self.indexing_table.alive:
                         self._wait(iteration_timestamp)
                         continue
+                    # Get tower position (needed even if tower stalled to log tower position)
+                    pos = self.indexing_table.get_position()
                     # Check tower if tower stalled
                     if self.indexing_table.get_stall_flag():
                         if not flag_stalled:
@@ -198,8 +200,7 @@ class Runner:
                             flag_stalled = True
                     else:
                         # Set tower position
-                        if abs(self.indexing_table.get_position() - aimed_indexing_table_orientation) \
-                                > self.HEADING_TOLERANCE:
+                        if abs(pos - aimed_indexing_table_orientation) > self.HEADING_TOLERANCE:
                             self.indexing_table.set_position(aimed_indexing_table_orientation)
                         flag_stalled = False
                     # Log Tower and Ship headings and status

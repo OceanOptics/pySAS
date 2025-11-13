@@ -235,7 +235,7 @@ class IndexingTable:
         """
         self.stalled = self.get_flag('st')
         if self.stalled:
-            self.__logger.warning(f'get_stall_flag: stalled')
+            self.__logger.debug(f'get_stall_flag: stalled')
         else:
             self.__logger.debug(f'get_stall_flag: operational')
         return self.stalled

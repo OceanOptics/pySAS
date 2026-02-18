@@ -216,10 +216,10 @@ class SatlanticLogger:
             self._smart_open(timestamp)
             self._file.write(data + pack_timestamp_satlantic(timestamp))
         # Write remaining data in queue before closing file
-        if self._file and self._file.closed:
+        if self._file and not self._file.closed:
             while not self._queue.empty():
                 data, timestamp = self._queue.get()
-            self._file.write(data + pack_timestamp_satlantic(timestamp))
+                self._file.write(data + pack_timestamp_satlantic(timestamp))
         # Close file
         self._close_file()
 
@@ -305,6 +305,6 @@ class SatlanticLogger:
         """
         self._stop_thread()
         if self._thread is not None:
-            self._thread.join(timeout=2)
+            self._thread.join(timeout=3)
             if self._thread.is_alive():
                 eng_log.warning('Writing thread did not finish, it may still be writing to file.')

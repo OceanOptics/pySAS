@@ -85,7 +85,7 @@ sidebar = html.Div([
                     dbc.Col([
                         dbc.Switch(id="hypersas_switch", value=False, className='mt-2 ms-1 d-inline-block')],
                             width=6, className="text-end"),
-                ], className="mt-5 mb-3"),
+                ], className="mb-3"),
                 dbc.Row([
                     dbc.Label("GPS", html_for="gps_switch", width=3),
                     dbc.Col([
@@ -97,9 +97,11 @@ sidebar = html.Div([
                                   style={'lineHeight': 0.72}, className='mt-2 me-2'),
                         dbc.Switch(id="gps_switch", value=False, className='mt-2 ms-1 d-inline-block')],
                             width=9, className="text-end"),
+                    dbc.FormText(["Ship Heading: ", html.Span("NA", 'gps_text_angle'), "°N"],
+                                 id='gps_text', className='mt-0', color='muted'),
                 ], className="mb-3"),
                 dbc.Row([
-                    dbc.Label("Tower", id='tower_label', html_for="tower_switch", width=4),
+                    dbc.Label("Tower", id='tower_label', html_for="tower_switch", width=4, style={'paddingRight': 0}),
                     dbc.Col([
                         dbc.Badge('Stalled', id='tower_stall_flag', color='danger', pill=True,
                                   style={'lineHeight': 0.72}, href="#", className='d-none'),  #mt-2 me-2 text-decoration-none
@@ -107,6 +109,8 @@ sidebar = html.Div([
                                   style={'lineHeight': 0.72}, href="#", className='mt-2 me-2 text-decoration-none'),
                         dbc.Switch(id="tower_switch", value=False, className='mt-2 ms-1 d-inline-block')],
                             width=8, className="text-end"),
+                    dbc.FormText(["Angle to Sun Azimuth: ", html.Span("NA", 'tower_text_angle'), "°"],
+                                 id='tower_text', className='mt-0', color='muted'),
                 ], className="mb-3"),
                 html.Div([
                     dcc.Slider(
@@ -210,6 +214,9 @@ def set_hypersas_switch(switch):
         logger.debug('set_hypersas_switch: busy')
         raise PreventUpdate
     if switch != runner.hypersas.alive:
+        if runner.operation_mode != 'manual':
+            logger.warning('set_hypersas_switch: unable, not in manual mode')
+            raise PreventUpdate
         runner.hypersas.busy = True
         if switch:
             logger.debug('set_hypersas_switch: start')
@@ -237,6 +244,9 @@ def set_gps_switch(switch):
         logger.debug('set_gps_switch: busy')
         raise PreventUpdate
     if switch != runner.gps.alive:
+        if runner.operation_mode != 'manual':
+            logger.warning('set_gps_switch: unable, not in manual mode')
+            raise PreventUpdate
         runner.gps.busy = True
         if switch:
             logger.debug('set_gps_switch: start')
@@ -297,6 +307,9 @@ def set_tower_switch(switch):
         logger.debug('set_tower_switch: busy')
         raise PreventUpdate
     if switch != runner.indexing_table.alive:
+        if runner.operation_mode != 'manual':
+            logger.warning('set_tower_switch: unable, not in manual mode')
+            raise PreventUpdate
         runner.indexing_table.busy = True
         if switch:
             logger.debug('set_tower_switch: start')
@@ -340,7 +353,6 @@ def get_tower_stall_flag(_, state):
 def set_tower_orientation(value):
     if runner.indexing_table.alive:
         runner.indexing_table.set_position(value)
-        logger.debug(f'set_tower_orientation: {value}')
     else:
         logger.warning('set_tower_orientation: unable, tower not alive')
 
@@ -350,7 +362,8 @@ def set_tower_orientation(value):
 def get_tower_orientation(_):
     if runner.indexing_table.alive:
         return f'Tower {runner.indexing_table.position:.1f}°' # if not isnan(runner.indexing_table.position) else 'Tower'
-    raise PreventUpdate
+    else:
+        return 'Tower'
 
 
 ##################
@@ -905,6 +918,8 @@ fig_system_orientation = fig
 
 
 @app.callback(Output('fig_system_orientation', 'figure'),
+              Output('gps_text_angle', 'children'),
+              Output('tower_text_angle', 'children'),
               Input('status_refresh_interval', 'n_intervals'),
               Input('tower_orientation', 'value'),
               Input('settings_modal_save', 'n_clicks'))  # If Tower Orientation Range Updated
@@ -980,7 +995,16 @@ def get_fig_system_orientation(_0, _1, _2):
         else:
             fig['data'][id]['visible'] = True
             fig['data'][id]['theta'] = [0, value]
-    return fig
+    # Update Ship Heading and Tower to Sun Azimuth Angle
+    gps_text, tower_text = 'NA', 'NA'
+    if not isnan(ship):
+        gps_text = f'{ship % 360:.1f}'  # Shift to 360 to be consistent with orientation plot
+        if not isnan(runner.gps.heading_accuracy):
+            gps_text += f'±{runner.gps.heading_accuracy:.1f}'
+        if not (isnan(tower) or isnan(sun)):
+            # Need tower adjusted to ship referential to compute angle with respect to the sun (need ship heading)
+            tower_text = f'{abs(((tower - sun) + 180) % 360 - 180):.1f}'
+    return fig, gps_text, tower_text
 
 
 fig = go.Figure()

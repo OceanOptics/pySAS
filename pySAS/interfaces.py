@@ -1,4 +1,4 @@
-from functools import reduce
+from functools import reduce, wraps
 from operator import xor
 
 from serial import Serial, SerialException
@@ -6,7 +6,7 @@ from timeit import default_timer
 from time import sleep, time
 from datetime import datetime
 from math import isnan, floor
-from threading import Thread, Lock
+from threading import Thread, Lock, RLock
 import logging
 from struct import unpack_from
 
@@ -52,11 +52,31 @@ class NoRelay():
         pass
 
 
+def thread_safe_method(func):
+    """Decorator to make a method thread-safe using self._serial_lock"""
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return func(self, *args, **kwargs)
+    return wrapper
+
+
+def alive_and_thread_safe_method(func):
+    """Decorator to check if alive and make method thread-safe"""
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            if not self.alive:
+                self.eng_log.error(f'{func.__name__}: unable, not alive')
+                return
+            return func(self, *args, **kwargs)
+    return wrapper
+
+
 class IndexingTable:
     """
-    Python Interface to custom made indexing table. The indexing table is made of a Lexium MDrive LMD M85 which is
-    communicating over RS485. The drive is interprets M-Code and must be set with local echo disabled (em=1).
-
+    Python Interface to custom-made indexing table. The indexing table is made of a Lexium MDrive LMD M85 which is
+    communicating over RS485. The drive interprets M-Code and must be set with local echo disabled (em=1).
     """
     GEAR_BOX_RATIO = 200000 / 360
     POSITION_LIMITS = [-180, 180]
@@ -95,9 +115,10 @@ class IndexingTable:
             return
         self._serial_port = cfg.get(self.__class__.__name__, 'port')
         # Loggers
-        self.__logger = logging.getLogger(self.__class__.__name__)
+        self.eng_log = logging.getLogger(self.__class__.__name__)
         # Serial
         self._serial = get_serial_instance(self.__class__.__name__, cfg)
+        self._lock = RLock()  # To avoid multiple threads using the serial connection at the same time (e.g. UI and main thread)
         # GPIO
         try:
             # Try to load physical pin factory (Factory())
@@ -105,12 +126,12 @@ class IndexingTable:
                                        active_high=False, initial_value=False)
         except BadPinFactory:
             # No physical gpio library installed, likely running on development platform
-            self.__logger.warning('Loading GPIO Mock Factory.')
+            self.eng_log.warning('Loading GPIO Mock Factory.')
             self._relay = OutputDevice(cfg.getint(self.__class__.__name__, 'relay_gpio_pin'),
                                        active_high=False, initial_value=False, pin_factory=MockFactory())
         except NoOptionError:
             # No gpio pin specified hence no relay control
-            self.__logger.warning(f'No relay for {self.__class__.__name__}.')
+            self.eng_log.warning(f'No relay for {self.__class__.__name__}.')
             self._relay = NoRelay()
 
         # Configuration variables specific to motor
@@ -125,17 +146,18 @@ class IndexingTable:
         # Register methods to execute at exit as cannot use __del__ as logging is already off-loaded
         atexit.register(self.stop)
 
+    @thread_safe_method
     def start(self):
         try:
             self.busy = True
             if not self.alive:
-                self.__logger.debug('start')
+                self.eng_log.debug('start')
                 self._relay.on()
                 sleep(self.COMMAND_EXECUTION_TIME)
                 try:
                     self._serial.open()
                 except SerialException as e:
-                    self.__logger.critical(e)
+                    self.eng_log.critical(e)
                     self._relay.off()
                     return False
                 self.set_configuration()
@@ -146,9 +168,10 @@ class IndexingTable:
         finally:
             self.busy = False
 
+    @thread_safe_method
     def set_configuration(self):
         self._serial.write(b'\x03')  # ctrl+c for resetting motor  # TODO Might Loose zero position due to that
-        self.__logger.debug('set_configuration')
+        self.eng_log.debug('set_configuration')
         sleep(0.5)                   # Reset takes longer than standard COMMAND_EXECUTION_TIME
         # Settings motor configuration
         self._serial.write(bytes('ee=1' + self.TERMINATOR, self.ENCODING))  # First command so no need for registration (backspace)
@@ -166,19 +189,20 @@ class IndexingTable:
         # Log initialization
         msg = self._serial_read()
         if msg:
-            self.__logger.debug(msg.decode(self.ENCODING, self.UNICODE_HANDLING))
+            self.eng_log.debug(msg.decode(self.ENCODING, self.UNICODE_HANDLING))
 
+    @thread_safe_method
     def set_position(self, position_degrees, check_stall_flag=False):
         # The stall flag must be checked after using the set_position function
         # to make sure the motion was done without issues.
         # This can be done by setting the argument check_stall_flag = True
         if not self.alive:
-            self.__logger.error('set_position: unable, not alive')
+            self.eng_log.error('set_position: unable, not alive')
             return False
         if position_degrees < self.POSITION_LIMITS[0] or self.POSITION_LIMITS[1] < position_degrees:
-            self.__logger.error('set_position: unable, position out of range ' + str(position_degrees))
+            self.eng_log.error('set_position: unable, position out of range ' + str(position_degrees))
             return False
-        self.__logger.debug('set_position(' + str(position_degrees) + ', ' + str(check_stall_flag) + ')')
+        self.eng_log.debug('set_position(' + str(position_degrees) + ', ' + str(check_stall_flag) + ')')
         pos_steps = int(position_degrees * self.GEAR_BOX_RATIO)
         self._serial.write(bytes(self.REGISTRATOR + 'ma ' + str(pos_steps) + self.TERMINATOR, self.ENCODING))
         if check_stall_flag:
@@ -192,15 +216,14 @@ class IndexingTable:
                 pre_pos = self.position
                 sleep(self.COMMAND_EXECUTION_TIME)
             if self.get_stall_flag():
-                self.__logger.warning('stalled while moving to ' + str(position_degrees))
+                self.eng_log.warning('stalled while moving to ' + str(position_degrees))
                 return False
-        else:
-            self.position = position_degrees
         return True
 
+    @thread_safe_method
     def get_position(self):
         if not self.alive:
-            self.__logger.error('get_position: unable, not alive')
+            self.eng_log.error('get_position: unable, not alive')
             self.position = float('nan')
             return self.position
         # Flush serial buffer
@@ -215,17 +238,18 @@ class IndexingTable:
             try:
                 pos_steps = int(msg.decode(self.ENCODING, self.UNICODE_HANDLING).strip())
                 self.position = pos_steps / self.GEAR_BOX_RATIO
-                self.__logger.debug(f'get_position: {self.position:.2f}')
+                self.eng_log.debug(f'get_position: {self.position:.2f}')
             except ValueError or UnicodeDecodeError:
-                self.__logger.error('unable to parse position')
+                self.eng_log.error('unable to parse position')
                 self.position = float('nan')
             finally:
                 return self.position
         else:
-            self.__logger.error('unable to get position')
+            self.eng_log.error('unable to get position')
             self.position = float('nan')
             return self.position
 
+    @thread_safe_method
     def get_stall_flag(self):
         """
         Read stall flag using the read_flag method
@@ -234,12 +258,15 @@ class IndexingTable:
                  True:  Motor stalled
         """
         self.stalled = self.get_flag('st')
-        if self.stalled:
-            self.__logger.debug(f'get_stall_flag: stalled')
+        if self.stalled is None:
+            pass  # already logged in get_flag method
+        elif self.stalled:
+            self.eng_log.debug(f'get_stall_flag: stalled')
         else:
-            self.__logger.debug(f'get_stall_flag: operational')
+            self.eng_log.debug(f'get_stall_flag: operational')
         return self.stalled
 
+    @alive_and_thread_safe_method
     def get_flag(self, flag_name):
         """
         Read flag requested
@@ -247,11 +274,6 @@ class IndexingTable:
         :param flag_name: name of flag requested
         :return: True (1) or False (0)
         """
-        if not self.alive:
-            self.__logger.error('get_flag: unable, not alive')
-            return
-        self.__logger.debug('get_flag(' + str(flag_name) + ')')
-
         # Flush serial buffer
         self._serial_read()
         # Ask stall flag to motor
@@ -263,18 +285,16 @@ class IndexingTable:
             try:
                 flag = int(msg.decode(self.ENCODING, self.UNICODE_HANDLING).strip())
             except ValueError or UnicodeDecodeError:
-                self.__logger.error('unable to parse flag ' + flag_name)
+                self.eng_log.error('unable to parse flag ' + flag_name)
                 return None
             return bool(flag)
         else:
-            self.__logger.error('unable to get flag ' + flag_name)
+            self.eng_log.error('unable to get flag ' + flag_name)
             return None
 
+    @alive_and_thread_safe_method
     def print_all_parameters(self):
-        if not self.alive:
-            self.__logger.error('print_all_parameters: unable, not alive')
-            return
-        self.__logger.debug('print_all_parameters')
+        self.eng_log.debug('print_all_parameters')
         # Flush serial buffer
         self._serial_read()
         # Ask stall flag to motor
@@ -285,29 +305,23 @@ class IndexingTable:
         if msg is not None:
             print(msg.decode(self.ENCODING, self.UNICODE_HANDLING).strip())
         else:
-            self.__logger.error('unable to read parameters')
+            self.eng_log.error('unable to read parameters')
 
+    @alive_and_thread_safe_method
     def reset_position_zero(self):
-        if not self.alive:
-            self.__logger.critical('reset_position_zero: unable, not alive')
-            return
-        self.__logger.warning('reset_position_zero: reset zero')
+        self.eng_log.warning('reset_position_zero: reset zero')
         self._serial.write(bytes(self.REGISTRATOR + 'p=0' + self.TERMINATOR, self.ENCODING))
         self.position = 0
 
+    @alive_and_thread_safe_method
     def reset_stall_flag(self):
-        if not self.alive:
-            self.__logger.critical('reset_stall_flag: unable, not alive')
-            return
-        self.__logger.warning('reset_stall_flag: reset stall flag')
+        self.eng_log.warning('reset_stall_flag: reset stall flag')
         self._serial.write(bytes(self.REGISTRATOR + 'st=0' + self.TERMINATOR, self.ENCODING))
         self.stalled = False
 
+    @alive_and_thread_safe_method
     def measure_motion_speed(self, test_position=360, timeout=20, delta_position=0.01):
-        if not self.alive:
-            self.__logger.error('measure_motion_speed: unable, not alive')
-            return
-        self.__logger.debug('measure_motion_speed()')
+        self.eng_log.debug('measure_motion_speed()')
         start_position = self.get_position()
         start_clock = default_timer()
         self.set_position(test_position)
@@ -322,27 +336,27 @@ class IndexingTable:
     def estimate_motion_time(self, current_position_degrees, aimed_position_degrees):
         # TODO Updated Model
         #  https://motion.schneider-electric.com/application-note/intro-mcode-basic-motion-commands/
-        if not self.alive:
-            self.__logger.error('estimate_motion_time: unable, not alive')
-            return
-        self.__logger.debug('estimate_motion_time()')
+        self.eng_log.debug('estimate_motion_time()')
         if current_position_degrees is not None and aimed_position_degrees is not None:
             return self.rotation_ispeed * abs(aimed_position_degrees - current_position_degrees) \
                    + self.rotation_delay
         else:
             return None
 
+    @thread_safe_method
     def _serial_read(self):
+        # Assumes serial connection is open and alive
         if self._serial.in_waiting > 0:
             self.packet_received = time()
             return self._serial.read(self._serial.in_waiting)
         else:
             return None
 
+    @thread_safe_method
     def stop(self):
         try:
             self.busy = True
-            self.__logger.debug('stop')
+            self.eng_log.debug('stop')
             if self.alive:
                 # Get stall flag (and reset if necessary)
                 self.get_stall_flag()
@@ -449,7 +463,7 @@ class Sensor:
                 self.alive = False
                 if hasattr(self._serial, 'cancel_read'):
                     self._serial.cancel_read()
-                # TODO Find elegant way to immediatly stop thread as slow down user interface when switching from auto to manual mode (timeout in serial won't do it as use serial.cancel_read)
+                # TODO Find elegant way to immediately stop thread as slow down user interface when switching from auto to manual mode (timeout in serial won't do it as use serial.cancel_read)
                 if not from_thread:
                     self._thread.join(2)
                     if self._thread.is_alive():

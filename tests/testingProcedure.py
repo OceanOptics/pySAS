@@ -25,7 +25,7 @@ class SlowIndexingTable(IndexingTable):
         # Log initialization
         msg = self._serial_read()
         if msg:
-            self.__logger.debug(msg.decode(self.ENCODING, self.UNICODE_HANDLING))
+            self.eng_log.debug(msg.decode(self.ENCODING, self.UNICODE_HANDLING))
 
 
 class TestingProcedure:

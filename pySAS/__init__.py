@@ -8,10 +8,10 @@ import traceback
 from geomag.geomag import GeoMag
 import configparser
 
-__version__ = '1.1.1'
+__version__ = '1.1.2'
 
 # Setup logging
-LOGGING_LEVEL = logging.INFO
+LOGGING_LEVEL = logging.DEBUG
 logging.basicConfig(level=LOGGING_LEVEL)
 root_logger = logging.getLogger()   # Get root logger
 

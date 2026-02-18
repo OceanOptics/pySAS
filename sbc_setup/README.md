@@ -135,3 +135,13 @@ To clone the SD card to a new one, use the following command. This will create a
 
 	diskutil list # find the disk number of the SD card
 	sudo dd bs=4M if=/dev/disk2 of=pySAS-v1.0.0-`date +%Y%m%d`.img
+
+### Network Configuration
+To show current connection use:
+
+    nmcli connection show
+
+To configure the network (wifi connection, ip settings) use:
+
+    sudo nmtui
+ 

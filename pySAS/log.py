@@ -304,6 +304,7 @@ class SatlanticLogger:
         :return:
         """
         self._stop_thread()
-        self._thread.join(timeout=2)
-        if self._thread.is_alive():
-            eng_log.warning('Writing thread did not finish, it may still be writing to file.')
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+            if self._thread.is_alive():
+                eng_log.warning('Writing thread did not finish, it may still be writing to file.')

@@ -703,9 +703,10 @@ def set_clock(set_clock_click):
 
 
 halt_modal = dbc.Modal([
-    dbc.ModalBody("Are you sure you want to shut down pySAS now ?", id="halt_modal_body"),
+    dbc.ModalBody("Do you want to Shut Down or Reboot pySAS?", id="halt_modal_body"),
     dbc.ModalFooter([
         dbc.Button("Cancel", id="halt_modal_cancel", color='secondary', n_clicks=0),
+        dbc.Button("Reboot", id="halt_modal_reboot", color='primary', outline=True, n_clicks=0),
         dbc.Button("Shut Down", id="halt_modal_shutdown", color='primary', n_clicks=0),
     ]),
 ], is_open=False, id="halt_modal", centered=True, backdrop="static")
@@ -722,15 +723,21 @@ def toggle_halt_modal(open_modal, cancel_modal, is_open):
 
 @app.callback(Output("halt_modal_body", "children"),
               Output("halt_modal_shutdown", "children"), Output("halt_modal_shutdown", "disabled"),
+              Output("halt_modal_reboot", "children"), Output("halt_modal_reboot", "disabled"),
               Output("halt_modal_cancel", "className"),
               Input("halt_modal_shutdown", "n_clicks"),
+              Input("halt_modal_reboot", "n_clicks"),
               prevent_initial_call=True)
-def halt(n_clicks):
-    if n_clicks:
-        return "Shutting down the system. Please wait 30 seconds before disconnecting power.", \
-               [dbc.Spinner(size='sm'), " Shutting Down... "], True, 'd-none'
-    else:
-        raise dash.exceptions.PreventUpdate()
+def halt(shutdown_clicks, reboot_clicks):
+    if shutdown_clicks:
+        return ("Shutting down the system. Please wait 30 seconds before disconnecting power.",
+                [dbc.Spinner(size='sm'), " Shutting Down... "], True,
+                no_update, True, 'd-none')
+    elif reboot_clicks:
+        return ("Rebooting the system. Refresh this page in ~1 min.",
+                no_update, True,
+                [dbc.Spinner(size='sm'), " Rebooting... "], True, 'd-none')
+    raise dash.exceptions.PreventUpdate()
 
 
 @app.callback(Output("no_output", "children", allow_duplicate=True), Input("halt_modal_body", "children"),
@@ -739,6 +746,10 @@ def stop_pysas_and_halt_system(body):
     if body[:13] == 'Shutting down':
         logger.info('halt')
         runner.interrupt_from_ui = True
+        stop_app()
+    elif body[:9] == 'Rebooting':
+        logger.info('reboot')
+        runner.reboot_from_ui = True
         stop_app()
     else:
         raise dash.exceptions.PreventUpdate()
@@ -755,14 +766,31 @@ def stop_app():
 app.clientside_callback(
     """
     function(value) {
-        if (value.includes('Shutting down')) {
+        if (value.includes('Shutting down') || value.includes('Rebooting')) {
             setTimeout(function() {
                 var body = document.getElementById('halt_modal_body');
-                body.innerHTML = "The system is down. You can safely unplug the power.";
-                var btn = document.getElementById('halt_modal_halt');
-                btn.innerHTML = "Down";
-                btn.classList.add("disabled")
+                var btn_halt = document.getElementById('halt_modal_shutdown');
+                var btn_reboot = document.getElementById('halt_modal_reboot');
+                if (value.includes('Shutting down')) {
+                    body.innerHTML = "The system is down. You can safely unplug the power.";
+                    btn_halt.innerHTML = "Down";
+                    btn_halt.classList.add("disabled")
+                    btn_reboot.classList.add("d-none")
+                } else {
+                    body.innerHTML = "The system is rebooting. Please wait...";
+                    btn_halt.classList.add("d-none")
+                    btn_reboot.innerHTML = "Booting...";
+                    btn_reboot.classList.add("disabled")
+                }
             }, 29000);
+        }
+        if (value.includes('Rebooting')) {
+            setTimeout(function() {
+                var body = document.getElementById('halt_modal_body');
+                body.innerHTML = "The system should be back on. Please refresh the page.";
+                var btn = document.getElementById('halt_modal_reboot');
+                btn.innerHTML = "On";
+            }, 50000);
         }
         return '';
     }

@@ -372,6 +372,8 @@ class IndexingTable:
                     self._serial.close()
                 # Stop Power
                 self._relay.off()
+                # Clear position
+                self.position = float('nan')
                 self.alive = False
         finally:
             self.busy = False

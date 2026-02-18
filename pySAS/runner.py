@@ -220,15 +220,19 @@ class Runner:
             # Timer
             iteration_timestamp = time()
             try:
-                # Do things only if HyperSAS is measuring
+                # Get Tower position and stall flag (needed by UI)
+                if self.indexing_table.alive:
+                    self.indexing_table.get_position()
+                    self.indexing_table.get_stall_flag()
+                # Get Sun Position (requires gps, needed by UI)
+                self.get_sun_position()
+                # Do things only if HyperSAS is not measuring
                 if not self.hypersas.alive:
                     self.gps.stop_logging()
                     self._wait(iteration_timestamp)
                     continue
                 # Turn on GPS logging (step does nothing if already on)
                 self.gps.start_logging()
-                # Get Sun Position (requires gps)
-                self.get_sun_position()
                 # Write Tower Data (requires gps, sun position, and tower position)
                 self.data_logger.write(*self.make_umtwr_frame())
             except Exception as e:

@@ -499,12 +499,35 @@ def get_true_north_heading(heading, latitude, longitude, datetime_utc=None, alti
 
 
 def normalize_angle(angle):
-    new_angle = angle
-    while new_angle <= -180:
-        new_angle += 360
-    while new_angle > 180:
-        new_angle -= 360
-    return new_angle
+    return (angle + 180) % 360 - 180
+
+
+def is_angle_between(angle, start, end):
+    """
+    Checks if an angle is within the arc from start to end (clockwise).
+    :return: True if in arc, False otherwise
+    """
+    # Normalize everything to [0, 360) to make the math intuitive
+    angle = angle % 360
+    start = start % 360
+    end = end % 360
+
+    if start <= end:
+        return start <= angle <= end
+    else:
+        # The range wraps around 360/0
+        return angle >= start or angle <= end
+
+
+def get_angular_distance(a, b):
+    """
+    Compute the shortest distance between two angles (0-180).
+    :param a: first angle
+    :param b: second angle
+    :return: distance in degrees (0-180).
+    """
+    diff = abs(a - b) % 360
+    return 180 - abs(diff - 180)
 
 
 def check_internet(host="8.8.8.8", port=53, timeout=3):
@@ -582,7 +605,6 @@ class AutoPilot:
 
         if not valid_options:
             # No option, look for non-optimal target (angle away from sun)
-            self.selected_option = None
             if self.target_limits[0] == self.target_limits[1]:
                 return float('nan')  # No valid target available
             # Compute aiming limits
@@ -592,15 +614,36 @@ class AutoPilot:
                                                  normalize_angle(aiming_heading_limits[0][1] - tower_zero_heading)],
                                                 [normalize_angle(aiming_heading_limits[1][0] - tower_zero_heading),
                                                  normalize_angle(aiming_heading_limits[1][1] - tower_zero_heading)]]
-            for t in self.tower_limits:
-                if ((self.target_limits[0] < self.target_limits[1] and
-                     (tower_orientation_options_limits[0][0] <= t <= tower_orientation_options_limits[0][1] or
-                      tower_orientation_options_limits[1][0] <= t <= tower_orientation_options_limits[1][1])) or
-                    (self.target_limits[0] > self.target_limits[1] and  # Reverse limits
-                     (t >= tower_orientation_options_limits[0][0] or tower_orientation_options_limits[0][1] >= t or
-                      t >= tower_orientation_options_limits[1][0] or tower_orientation_options_limits[1][1] >= t))):
-                    return t
-            return float('nan')  # No valid target available
+
+            for option, t in enumerate(self.tower_limits):
+                if (is_angle_between(t, *tower_orientation_options_limits[0])
+                        or is_angle_between(t, *tower_orientation_options_limits[1])):
+                    valid_options += option + 1
+
+            if not valid_options:
+                self.selected_option = None
+                return float('nan')  # No valid target in range
+            elif valid_options < 3:
+                # One option
+                self.selected_option = valid_options - 1
+                return self.tower_limits[self.selected_option]
+            else:
+                # Two options: find the option the closest to the optimal target angle
+                # Find best option
+                dist_options = [
+                    abs(get_angular_distance(self.tower_limits[0], sun_azimuth - tower_zero_heading) - self.target),
+                    abs(get_angular_distance(self.tower_limits[1], sun_azimuth - tower_zero_heading) - self.target)
+                ]
+                best_option = min([0, 1], key=lambda idx: dist_options[idx])
+                # If no previous option go for best option
+                if self.selected_option is None:
+                    self.selected_option = best_option
+                    return self.tower_limits[self.selected_option]
+                # Hysteresis check, only switch if significant improvement
+                if dist_options[best_option] < (dist_options[self.selected_option] - self.min_dist_delta):
+                    self.selected_option = best_option
+                    return self.tower_limits[self.selected_option]
+                return self.tower_limits[self.selected_option]
         elif valid_options < 3:
             # One option
             self.selected_option = valid_options - 1

@@ -199,6 +199,9 @@ class IndexingTable:
         if not self.alive:
             self.eng_log.error('set_position: unable, not alive')
             return False
+        if not isinstance(position_degrees, (int, float)):
+            self.eng_log.error('set_position: unable, position is not a number')
+            return False
         if position_degrees < self.POSITION_LIMITS[0] or self.POSITION_LIMITS[1] < position_degrees:
             self.eng_log.error('set_position: unable, position out of range ' + str(position_degrees))
             return False
@@ -891,13 +894,21 @@ class HyperOCR(Sensor):
                 self._dispatcher[packet_header] = 'THS'
             elif 'LT' == cal.core_groupname and 'SATHSL' in packet_header:
                 self._dispatcher[packet_header] = 'Lt'
+            elif 'LT' == cal.core_groupname and 'SATHPL' in packet_header:
+                self._dispatcher[packet_header] = 'Lt'
             elif 'LI' == cal.core_groupname and 'SATHSL' in packet_header:
+                self._dispatcher[packet_header] = 'Li'
+            elif 'LI' == cal.core_groupname and 'SATHPL' in packet_header:
                 self._dispatcher[packet_header] = 'Li'
             elif 'ES' == cal.core_groupname and 'SATHSE' in packet_header:
                 self._dispatcher[packet_header] = 'Es'
             elif 'LT' == cal.core_groupname and 'SATHLD' in packet_header:
                 self._dispatcher[packet_header] = 'Lt_dark'
+            elif 'LT' == cal.core_groupname and 'SATPLD' in packet_header:
+                self._dispatcher[packet_header] = 'Lt_dark'
             elif 'LI' == cal.core_groupname and 'SATHLD' in packet_header:
+                self._dispatcher[packet_header] = 'Li_dark'
+            elif 'LI' == cal.core_groupname and 'SATPLD' in packet_header:
                 self._dispatcher[packet_header] = 'Li_dark'
             elif 'ES' == cal.core_groupname and 'SATHED' in packet_header:
                 self._dispatcher[packet_header] = 'Es_dark'
@@ -909,7 +920,11 @@ class HyperOCR(Sensor):
         for packet_header, cal in self._parser.cal.items():
             if 'LT' == cal.core_groupname and 'SATHSL' in packet_header:
                 Lt_frame_header = packet_header
+            elif 'LT' == cal.core_groupname and 'SATHPL' in packet_header:
+                Lt_frame_header = packet_header
             elif 'LI' == cal.core_groupname and 'SATHSL' in packet_header:
+                Li_frame_header = packet_header
+            elif 'LI' == cal.core_groupname and 'SATHPL' in packet_header:
                 Li_frame_header = packet_header
             elif 'ES' == cal.core_groupname and 'SATHSE' in packet_header:
                 Es_frame_header = packet_header

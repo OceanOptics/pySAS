@@ -99,6 +99,8 @@ sidebar = html.Div([
                             width=9, className="text-end"),
                     dbc.FormText(["Ship Heading: ", html.Span("NA", 'gps_text_angle'), "°N"],
                                  id='gps_text', className='mt-0', color='muted'),
+                    dbc.FormText(["Sun Elevation: ", html.Span("NA", id='sun_elevation_text_angle'), "°"],
+                                 id='sun_elevation_text', className='mt-0', color='muted'),
                 ], className="mb-3"),
                 dbc.Row([
                     dbc.Label("Tower", id='tower_label', html_for="tower_switch", width=4, style={'paddingRight': 0}),
@@ -920,6 +922,7 @@ fig_system_orientation = fig
 @app.callback(Output('fig_system_orientation', 'figure'),
               Output('gps_text_angle', 'children'),
               Output('tower_text_angle', 'children'),
+              Output('sun_elevation_text_angle', 'children'),
               Input('status_refresh_interval', 'n_intervals'),
               Input('tower_orientation', 'value'),
               Input('settings_modal_save', 'n_clicks'))  # If Tower Orientation Range Updated
@@ -1004,7 +1007,11 @@ def get_fig_system_orientation(_0, _1, _2):
         if not (isnan(tower) or isnan(sun)):
             # Need tower adjusted to ship referential to compute angle with respect to the sun (need ship heading)
             tower_text = f'{abs(((tower - sun) + 180) % 360 - 180):.1f}'
-    return fig, gps_text, tower_text
+    # Update Sun Elevation
+    sun_elevation_text = 'NA'
+    if timestamp - runner.sun_position_timestamp < runner.DATA_EXPIRED_DELAY:
+        sun_elevation_text = f'{runner.sun_elevation:.1f}'
+    return fig, gps_text, tower_text, sun_elevation_text
 
 
 fig = go.Figure()

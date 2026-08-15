@@ -891,13 +891,21 @@ class HyperOCR(Sensor):
                 self._dispatcher[packet_header] = 'THS'
             elif 'LT' == cal.core_groupname and 'SATHSL' in packet_header:
                 self._dispatcher[packet_header] = 'Lt'
+            elif 'LT' == cal.core_groupname and 'SATHPL' in packet_header:
+                self._dispatcher[packet_header] = 'Lt'
             elif 'LI' == cal.core_groupname and 'SATHSL' in packet_header:
+                self._dispatcher[packet_header] = 'Li'
+            elif 'LI' == cal.core_groupname and 'SATHPL' in packet_header:
                 self._dispatcher[packet_header] = 'Li'
             elif 'ES' == cal.core_groupname and 'SATHSE' in packet_header:
                 self._dispatcher[packet_header] = 'Es'
             elif 'LT' == cal.core_groupname and 'SATHLD' in packet_header:
                 self._dispatcher[packet_header] = 'Lt_dark'
+            elif 'LT' == cal.core_groupname and 'SATPLD' in packet_header:
+                self._dispatcher[packet_header] = 'Lt_dark'
             elif 'LI' == cal.core_groupname and 'SATHLD' in packet_header:
+                self._dispatcher[packet_header] = 'Li_dark'
+            elif 'LI' == cal.core_groupname and 'SATPLD' in packet_header:
                 self._dispatcher[packet_header] = 'Li_dark'
             elif 'ES' == cal.core_groupname and 'SATHED' in packet_header:
                 self._dispatcher[packet_header] = 'Es_dark'
@@ -909,7 +917,11 @@ class HyperOCR(Sensor):
         for packet_header, cal in self._parser.cal.items():
             if 'LT' == cal.core_groupname and 'SATHSL' in packet_header:
                 Lt_frame_header = packet_header
+            elif 'LT' == cal.core_groupname and 'SATHPL' in packet_header:
+                Lt_frame_header = packet_header
             elif 'LI' == cal.core_groupname and 'SATHSL' in packet_header:
+                Li_frame_header = packet_header
+            elif 'LI' == cal.core_groupname and 'SATHPL' in packet_header:
                 Li_frame_header = packet_header
             elif 'ES' == cal.core_groupname and 'SATHSE' in packet_header:
                 Es_frame_header = packet_header
@@ -917,12 +929,12 @@ class HyperOCR(Sensor):
             self.Lt_wavelength = [float(self._parser.cal[Lt_frame_header].id[i])
                                   for i in self._parser.cal[Lt_frame_header].core_variables]
         else:
-            self.Es_wavelength = float('nan')
+            self.Lt_wavelength = float('nan')
         if Li_frame_header:
             self.Li_wavelength = [float(self._parser.cal[Li_frame_header].id[i])
                                   for i in self._parser.cal[Li_frame_header].core_variables]
         else:
-            self.Es_wavelength = float('nan')
+            self.Li_wavelength = float('nan')
         if Es_frame_header:
             self.Es_wavelength = [float(self._parser.cal[Es_frame_header].id[i])
                                   for i in self._parser.cal[Es_frame_header].core_variables]

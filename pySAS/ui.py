@@ -1022,7 +1022,7 @@ lt_id = 0
 fig.add_scatter(x=[0, 1], y=[0, 1], name='Lt (&mu;W/cm<sup>2</sup>/nm/sr)', marker_color='#37536d', mode='lines',
                 visible=False)
 li_id = 1
-fig.add_scatter(x=[0, 1], y=[0, 1], name='&rho;<sub>sky</sub>&middot;Li (&mu;W/cm<sup>2</sup>/nm/sr)',
+fig.add_scatter(x=[0, 1], y=[0, 1], name='ρ<sub>sky</sub>·Li (&mu;W/cm<sup>2</sup>/nm/sr)',
                 marker_color='#1a76ff', mode='lines', visible=False)
 es_id = 2
 fig.add_scatter(x=[0, 1], y=[0, 1], yaxis='y2', name='Es (&mu;W/cm<sup>2</sup>/nm)', marker_color='orange', mode='lines',
@@ -1101,14 +1101,14 @@ rrs_lt_id = 0
 fig.add_scatter(x=[0, 1], y=[0, 1], name='Lt (&mu;W/cm<sup>2</sup>/nm/sr)', marker_color='#37536d', mode='lines',
                 visible=False)
 rrs_li_id = 1
-fig.add_scatter(x=[0, 1], y=[0, 1], name='&rho;<sub>sky</sub>&middot;Li (&mu;W/cm<sup>2</sup>/nm/sr)',
+fig.add_scatter(x=[0, 1], y=[0, 1], name='ρ<sub>sky</sub>·Li (&mu;W/cm<sup>2</sup>/nm/sr)',
                 marker_color='#1a76ff', mode='lines', visible=False)
 rrs_ed_id = 2
 fig.add_scatter(x=[0, 1], y=[0, 1], yaxis='y2', name='Ed (&mu;W/cm<sup>2</sup>/nm)', marker_color='orange', mode='lines',
                 visible=False)
 
 fig.update_layout(
-    title='Lt, &rho;<sub>sky</sub>&middot;Li &amp; Ed', title_x=0.5,
+    title='Lt, ρ<sub>sky</sub>·Li & Ed', title_x=0.5,
     showlegend=True, legend=dict(x=1.0, y=1.0, xanchor='right'),
     margin=dict(l=20, r=80, t=80, b=40),
     xaxis=dict(title=dict(text='Wavelength (nm)'), exponentformat='power', showgrid=True),

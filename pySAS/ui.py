@@ -1097,6 +1097,87 @@ def get_fig_spectrum(_, cache):
 
 
 fig = go.Figure()
+rrs_lt_id = 0
+fig.add_scatter(x=[0, 1], y=[0, 1], name='Lt (&mu;W/cm<sup>2</sup>/nm/sr)', marker_color='#37536d', mode='lines',
+                visible=False)
+rrs_li_id = 1
+fig.add_scatter(x=[0, 1], y=[0, 1], name='&rho;<sub>sky</sub>&middot;Li (&mu;W/cm<sup>2</sup>/nm/sr)',
+                marker_color='#1a76ff', mode='lines', visible=False)
+rrs_ed_id = 2
+fig.add_scatter(x=[0, 1], y=[0, 1], yaxis='y2', name='Ed (&mu;W/cm<sup>2</sup>/nm)', marker_color='orange', mode='lines',
+                visible=False)
+
+fig.update_layout(
+    title='Lt, &rho;<sub>sky</sub>&middot;Li &amp; Ed', title_x=0.5,
+    showlegend=True, legend=dict(x=1.0, y=1.0, xanchor='right'),
+    margin=dict(l=20, r=80, t=80, b=40),
+    xaxis=dict(title=dict(text='Wavelength (nm)'), exponentformat='power', showgrid=True),
+    yaxis=dict(title=dict(text='Radiance (&mu;W/cm<sup>2</sup>/nm/sr)'), showgrid=True, exponentformat='power'),
+    yaxis2=dict(title=dict(text='Irradiance (&mu;W/cm<sup>2</sup>/nm)'),
+                title_font_color='orange', tickfont_color='orange',
+                side="right", anchor="x", overlaying="y")
+)
+fig_rrs_inputs = fig
+
+
+@app.callback(Output('fig_rrs_inputs', 'figure'), Output('fig_rrs_inputs_cache', 'data', allow_duplicate=True),
+              Input('hypersas_reading_interval', 'n_intervals'),
+              State('fig_rrs_inputs_cache', 'data'), prevent_initial_call=True)
+def get_fig_rrs_inputs(_, cache):
+    # Preparatory view for an on-the-fly Rrs estimate: Lt, rho_sky*Li, and Ed together
+    # so their orders of magnitude can be compared visually. Rrs itself is not computed yet.
+    fig = Patch()
+    if not cache:
+        cache = [False] * 3
+    # Check alive
+    if not runner.hypersas.alive:
+        cache = [False] * 3
+        for id in range(3):
+            fig['data'][id]['visible'] = False
+    # Parse data
+    timestamp = time()
+    runner.hypersas.parse_packets()
+    if runner.es:
+        runner.es.parse_packets()
+    # Update data
+    if runner.hypersas.Lt is not None and timestamp - runner.hypersas.packet_Lt_parsed < runner.DATA_EXPIRED_DELAY:
+        fig['data'][rrs_lt_id]['visible'] = True
+        if cache[rrs_lt_id] is False:
+            fig['data'][rrs_lt_id]['x'] = runner.hypersas.Lt_wavelength
+            cache[rrs_lt_id] = True
+        fig['data'][rrs_lt_id]['y'] = runner.hypersas.Lt
+    else:
+        fig['data'][rrs_lt_id]['visible'] = False
+    if runner.hypersas.Li is not None and timestamp - runner.hypersas.packet_Li_parsed < runner.DATA_EXPIRED_DELAY:
+        fig['data'][rrs_li_id]['visible'] = True
+        if cache[rrs_li_id] is False:
+            fig['data'][rrs_li_id]['x'] = runner.hypersas.Li_wavelength
+            cache[rrs_li_id] = True
+        fig['data'][rrs_li_id]['y'] = RHO_SKY * np.asarray(runner.hypersas.Li)
+    else:
+        fig['data'][rrs_li_id]['visible'] = False
+    if runner.es:
+        if runner.es.Es is not None and timestamp - runner.es.packet_Es_parsed < runner.DATA_EXPIRED_DELAY:
+            fig['data'][rrs_ed_id]['visible'] = True
+            if cache[rrs_ed_id] is False:
+                fig['data'][rrs_ed_id]['x'] = runner.es.Es_wavelength
+                cache[rrs_ed_id] = True
+            fig['data'][rrs_ed_id]['y'] = runner.es.Es
+        else:
+            fig['data'][rrs_ed_id]['visible'] = False
+    else:
+        if runner.hypersas.Es is not None and timestamp - runner.hypersas.packet_Es_parsed < runner.DATA_EXPIRED_DELAY:
+            fig['data'][rrs_ed_id]['visible'] = True
+            if cache[rrs_ed_id] is False:
+                fig['data'][rrs_ed_id]['x'] = runner.hypersas.Es_wavelength
+                cache[rrs_ed_id] = True
+            fig['data'][rrs_ed_id]['y'] = runner.hypersas.Es
+        else:
+            fig['data'][rrs_ed_id]['visible'] = False
+    return fig, cache
+
+
+fig = go.Figure()
 imu_pitch_id = 0
 fig.add_scatter(x=[], y=[], name='Pitch (IMU)', marker_color='green', mode='lines+markers',
                 visible=False)
@@ -1194,8 +1275,11 @@ content = html.Div([
     ]),
     dbc.Row([
         dbc.Col([dcc.Graph(figure=fig_timeseries, id='fig_timeseries',
-                           style={'height': '50vh'}, config=graph_config)], width=12),
+                           style={'height': '50vh'}, config=graph_config)], md=6, sm=12, xs=12),
+        dbc.Col([dcc.Graph(figure=fig_rrs_inputs, id='fig_rrs_inputs',
+                           style={'height': '50vh'}, config=graph_config)], md=6, sm=12, xs=12),
         dcc.Store(id='fig_timeseries_cache'),
+        dcc.Store(id='fig_rrs_inputs_cache'),
     ]),
 ], id="page-content")
 

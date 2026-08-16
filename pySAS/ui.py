@@ -31,6 +31,15 @@ logger = logging.getLogger('ui')
 
 runner = Runner(CFG_FILENAME)
 
+# Friendly labels for Runner.heading_source, see [Runner] heading_source in pysas_cfg.ini
+HEADING_SOURCE_LABELS = {
+    'gps_relative_position': 'RTK',
+    'gps_motion': 'GPS Motion',
+    'gps_vehicle': 'GPS Vehicle',
+    'ths_heading': 'THS',
+    'posmv_heading': 'POS MV',
+}
+
 app = dash.Dash(
     '__main__',
     title= "pySAS v" + __version__, update_title=None,
@@ -97,7 +106,8 @@ sidebar = html.Div([
                                   style={'lineHeight': 0.72}, className='mt-2 me-2'),
                         dbc.Switch(id="gps_switch", value=False, className='mt-2 ms-1 d-inline-block')],
                             width=9, className="text-end"),
-                    dbc.FormText(["Ship Heading: ", html.Span("NA", 'gps_text_angle'), "°N"],
+                    dbc.FormText(["Ship Heading (", HEADING_SOURCE_LABELS.get(runner.heading_source, runner.heading_source),
+                                  "): ", html.Span("NA", 'gps_text_angle'), "°N"],
                                  id='gps_text', className='mt-0', color='muted'),
                 ], className="mb-3"),
                 dbc.Row([

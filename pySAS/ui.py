@@ -110,6 +110,8 @@ sidebar = html.Div([
                                                               id='heading_source_label'),
                                   "): ", html.Span("NA", 'gps_text_angle'), "°N"],
                                  id='gps_text', className='mt-0', color='muted'),
+                    dbc.FormText(["Position: ", html.Span("NA", id='position_text_value')],
+                                 id='position_text', className='mt-0', color='muted'),
                 ], className="mb-3"),
                 dbc.Row([
                     dbc.Label("Tower", id='tower_label', html_for="tower_switch", width=4, style={'paddingRight': 0}),
@@ -963,11 +965,15 @@ fig_system_orientation = fig
               Output('gps_text_angle', 'children'),
               Output('tower_text_angle', 'children'),
               Output('heading_source_label', 'children'),
+              Output('position_text_value', 'children'),
               Input('status_refresh_interval', 'n_intervals'),
               Input('tower_orientation', 'value'),
               Input('settings_modal_save', 'n_clicks'))  # If Tower Orientation Range Updated
 def get_fig_system_orientation(_0, _1, _2):
     timestamp = time()
+    # Position/time source (GPS or POS MV) driving sun position, magnetic declination corrections,
+    # and the position readout below -- follows heading_source, see Runner._position_source()
+    position_source, _ = runner._position_source()
     # Update telemetry in special cases
     if runner.operation_mode == 'manual' and timestamp - runner.sun_position_timestamp > runner.refresh_delay:
         # Get Sun elevation
@@ -976,8 +982,8 @@ def get_fig_system_orientation(_0, _1, _2):
         # Get HyperSAS THS Compass adjusted
         if runner.heading_source != 'ths_heading' and runner.hypersas.alive:
             runner.hypersas.compass_adj = get_true_north_heading(runner.hypersas.compass,
-                                                                 runner.gps.latitude, runner.gps.longitude,
-                                                                 runner.gps.datetime, runner.gps.altitude)
+                                                                 position_source.latitude, position_source.longitude,
+                                                                 position_source.datetime, position_source.altitude)
         # Get Heading
         runner.get_ship_heading()
     # Get Tower Orientation
@@ -1005,7 +1011,7 @@ def get_fig_system_orientation(_0, _1, _2):
     # Get HyperSAS Heading
     ths = float('nan')
     if timestamp - runner.hypersas.packet_THS_parsed < runner.DATA_EXPIRED_DELAY:
-        if isnan(runner.gps.latitude):
+        if isnan(position_source.latitude):
             ths = runner.hypersas.compass
         else:
             ths = runner.hypersas.compass_adj
@@ -1013,12 +1019,12 @@ def get_fig_system_orientation(_0, _1, _2):
     imu = float('nan')
     if runner.imu:
         if timestamp - runner.imu.packet_received < runner.DATA_EXPIRED_DELAY:
-            if isnan(runner.gps.latitude):
+            if isnan(position_source.latitude):
                 imu = runner.imu.yaw
             else:
                 imu = get_true_north_heading(runner.imu.yaw,
-                                             runner.gps.latitude, runner.gps.longitude,
-                                             runner.gps.datetime, runner.gps.altitude)
+                                             position_source.latitude, position_source.longitude,
+                                             position_source.datetime, position_source.altitude)
     # Get motion heading from GPS
     motion = float('nan')
     if timestamp - runner.gps.packet_pvt_received < runner.DATA_EXPIRED_DELAY and \
@@ -1038,17 +1044,27 @@ def get_fig_system_orientation(_0, _1, _2):
         else:
             fig['data'][id]['visible'] = True
             fig['data'][id]['theta'] = [0, value]
+    # Relabel the ship trace to match the active heading source (was a fixed "Ship (Dual GPS)" label)
+    fig['data'][ship_id]['name'] = ('Ship (POS MV)' if runner.heading_source == 'posmv_heading'
+                                     else 'Ship (Dual GPS)')
     # Update Ship Heading and Tower to Sun Azimuth Angle
     gps_text, tower_text = 'NA', 'NA'
     if not isnan(ship):
         gps_text = f'{ship % 360:.1f}'  # Shift to 360 to be consistent with orientation plot
-        if not isnan(runner.gps.heading_accuracy):
-            gps_text += f'±{runner.gps.heading_accuracy:.1f}'
+        if not isnan(runner.ship_heading_accuracy):
+            gps_text += f'±{runner.ship_heading_accuracy:.1f}'
         if not (isnan(tower) or isnan(sun)):
             # Need tower adjusted to ship referential to compute angle with respect to the sun (need ship heading)
             tower_text = f'{abs(((tower - sun) + 180) % 360 - 180):.1f}'
     heading_source_text = HEADING_SOURCE_LABELS.get(runner.heading_source, runner.heading_source)
-    return fig, gps_text, tower_text, heading_source_text
+    # Update Position (from the same source driving heading/sun position)
+    if isnan(position_source.latitude) or isnan(position_source.longitude):
+        position_text = 'NA'
+    else:
+        lat_hm = 'S' if position_source.latitude < 0 else 'N'
+        lon_hm = 'W' if position_source.longitude < 0 else 'E'
+        position_text = f'{abs(position_source.latitude):.4f}°{lat_hm}, {abs(position_source.longitude):.4f}°{lon_hm}'
+    return fig, gps_text, tower_text, heading_source_text, position_text
 
 
 fig = go.Figure()

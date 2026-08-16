@@ -53,6 +53,7 @@ class Runner:
         self.sun_azimuth = float('nan')
         self.sun_position_timestamp = float('nan')
         self.ship_heading = float('nan')
+        self.ship_heading_accuracy = float('nan')
         self.ship_heading_timestamp = float('nan')
         self.interrupt_from_ui = False
         self.reboot_from_ui = False
@@ -351,16 +352,19 @@ class Runner:
         if self.heading_source == 'gps_relative_position':
             if self.gps.heading_valid and time() - self.gps.packet_relposned_received < self.DATA_EXPIRED_DELAY:
                 self.ship_heading = self.pilot.get_ship_heading(self.gps.heading)
+                self.ship_heading_accuracy = self.gps.heading_accuracy
                 self.ship_heading_timestamp = self.gps.packet_relposned_received
                 return True
         elif self.heading_source == 'gps_motion':
             if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
                 self.ship_heading = self.pilot.get_ship_heading(self.gps.heading_motion)  # TODO Check if need compass orientation correction
+                self.ship_heading_accuracy = float('nan')
                 self.ship_heading_timestamp = self.gps.packet_pvt_received
                 return True
         elif self.heading_source == 'gps_vehicle':
             if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
                 self.ship_heading = self.pilot.get_ship_heading(self.gps.heading_vehicle)  # TODO Check if need compass orientation correction
+                self.ship_heading_accuracy = self.gps.heading_vehicle_accuracy
                 self.ship_heading_timestamp = self.gps.packet_pvt_received
                 return True
         elif self.heading_source == 'ths_heading':
@@ -370,11 +374,13 @@ class Runner:
                                                                    self.gps.latitude, self.gps.longitude,
                                                                    self.gps.datetime, self.gps.altitude)
                 self.ship_heading = self.pilot.get_ship_heading(self.hypersas.compass_adj, self.indexing_table.get_position())
+                self.ship_heading_accuracy = float('nan')
                 self.ship_heading_timestamp = self.hypersas.packet_THS_parsed
                 return True
         elif self.heading_source == 'posmv_heading':
             if self.posmv and time() - self.posmv.packet_heading_received < self.DATA_EXPIRED_DELAY:
                 self.ship_heading = self.pilot.get_ship_heading(self.posmv.heading)
+                self.ship_heading_accuracy = self.posmv.heading_accuracy
                 self.ship_heading_timestamp = self.posmv.packet_heading_received
                 return True
         else:
@@ -382,10 +388,10 @@ class Runner:
         return False
 
     def make_umtwr_frame(self):
-        # Ship Heading (based on relative RTK GPS position regardless of setting, as only point where it's reported)
-        if self.gps.heading_valid and time() - self.gps.packet_relposned_received < self.DATA_EXPIRED_DELAY:
-            ship_heading = self.pilot.get_ship_heading(self.gps.heading) % 360
-            ship_heading_accuracy = self.gps.heading_accuracy
+        # Ship Heading (from the active heading_source -- same value used to steer the tower)
+        if not isnan(self.ship_heading) and time() - self.ship_heading_timestamp < self.DATA_EXPIRED_DELAY:
+            ship_heading = self.ship_heading % 360
+            ship_heading_accuracy = self.ship_heading_accuracy
         else:
             ship_heading = float('nan')
             ship_heading_accuracy = float('nan')

@@ -389,12 +389,9 @@ settings_modal = dbc.Modal([
             dbc.Label("Heading Source", html_for='heading_source_select'),
             dcc.Dropdown(id='heading_source_select', searchable=False, clearable=False,
                         options=[
-                            {'label': 'RTK (GPS relative position)', 'value': 'gps_relative_position'},
-                            {'label': 'GPS Motion', 'value': 'gps_motion'},
-                            {'label': 'GPS Vehicle', 'value': 'gps_vehicle'},
-                            {'label': 'THS (HyperSAS compass)', 'value': 'ths_heading'},
-                            {'label': 'POS MV' if runner.posmv else
-                                      'POS MV (edit config file manually and restart pySAS to enable)',
+                            {'label': "RTK from pySAS's dual GPS", 'value': 'gps_relative_position'},
+                            {'label': "POS MV from ship navigation" if runner.posmv else
+                                      "POS MV from ship navigation (edit config file manually and restart pySAS to enable)",
                              'value': 'posmv_heading', 'disabled': runner.posmv is None},
                         ]),
             dbc.FormText('Source used to compute ship heading for autopilot steering, also logged in the '
@@ -408,8 +405,10 @@ settings_modal = dbc.Modal([
                 dbc.Input(id='gps_orientation', type='number', min=-180, max=360, step=1, class_name='text-end'),
                 dbc.InputGroupText("°")
             ]),
-            dbc.FormText('Difference in heading between the GPS and the ship. '
-                         'For details, see schematics inside the pySAS controller box.', color='muted'),
+            dbc.FormText('Difference in heading between the GPS and the ship. Only applies when Heading '
+                         'Source is set to "RTK from pySAS\'s dual GPS" -- POS MV reports the ship\'s true '
+                         'heading directly and ignores this setting. For details, see schematics inside '
+                         'the pySAS controller box.', color='muted'),
         ], className="mb-3"),
         dbc.Row([
             dbc.Label("Tower Orientation Range", html_for="tower_valid_orientation_prt"),

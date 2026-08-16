@@ -379,7 +379,11 @@ class Runner:
                 return True
         elif self.heading_source == 'posmv_heading':
             if self.posmv and time() - self.posmv.packet_heading_received < self.DATA_EXPIRED_DELAY:
-                self.ship_heading = self.pilot.get_ship_heading(self.posmv.heading)
+                # POS MV reports the ship's true heading directly (already aided/calibrated to the
+                # vessel by the POS MV itself) -- unlike the other sources, it must NOT go through
+                # pilot.get_ship_heading()'s compass_zero correction, which is specific to the RTK
+                # GPS antenna mounting offset and would misapply here.
+                self.ship_heading = normalize_angle(self.posmv.heading)
                 self.ship_heading_accuracy = self.posmv.heading_accuracy
                 self.ship_heading_timestamp = self.posmv.packet_heading_received
                 return True

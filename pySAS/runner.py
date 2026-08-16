@@ -237,8 +237,10 @@ class Runner:
                     self.gps.stop_logging()
                     self._wait(iteration_timestamp)
                     continue
-                # Turn on GPS logging (step does nothing if already on)
-                self.gps.start_logging()
+                # Turn on GPS logging (step does nothing if already on), unless POS MV is the active
+                # position source -- avoid writing two independent $GPRMC streams to the raw files
+                if self.heading_source != 'posmv_heading':
+                    self.gps.start_logging()
                 # Write Tower Data (requires gps, sun position, and tower position)
                 self.data_logger.write(*self.make_umtwr_frame())
             except Exception as e:
@@ -304,7 +306,10 @@ class Runner:
                 if not self.internet and not self.hypersas.alive:
                     self.get_time_sync()
                 self.indexing_table.start()
-                self.gps.start_logging()
+                # Avoid writing two independent $GPRMC streams to the raw files when POS MV is the
+                # active position source
+                if self.heading_source != 'posmv_heading':
+                    self.gps.start_logging()
                 if self.es:
                     self.es.start()
                 if self.imu:
@@ -313,15 +318,25 @@ class Runner:
                 self.asleep = False
         self.start_sleep_timestamp = None  # Reset sleep timer, in any case to stay up for as long as possible
 
+    def _position_source(self):
+        """
+        Position/time source to use for sun position and time sync, following heading_source so
+        pySAS can run fully off POS MV (position, heading, and time) without the onboard GPS.
+        :return: (source, position_fresh) where source is self.posmv or self.gps
+        """
+        if self.heading_source == 'posmv_heading':
+            return self.posmv, bool(self.posmv) and time() - self.posmv.packet_pvt_received < self.DATA_EXPIRED_DELAY
+        return self.gps, time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY
+
     def get_time_sync(self):
         """
-        Sync system time to GPS, override used if time has already been synced
+        Sync system time to the active position source, override used if time has already been synced
         """
-        if self.gps.fix_ok and self.gps.datetime_valid and \
-                time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
+        source, position_fresh = self._position_source()
+        if source and source.fix_ok and source.datetime_valid and position_fresh:
             pre_sync = time()
-            delta = timedelta(seconds=(pre_sync - self.gps.packet_pvt_received))
-            run(("date", "-s", str((self.gps.datetime+delta).isoformat())))
+            delta = timedelta(seconds=(pre_sync - source.packet_pvt_received))
+            run(("date", "-s", str((source.datetime+delta).isoformat())))
             self.time_synced = time()
             self.__logger.info("Time synchronized. From %s to %s" % (strftime('%Y/%m/%d %H:%M:%S', gmtime(pre_sync)),
                                strftime('%Y/%m/%d %H:%M:%S', gmtime(self.time_synced))))
@@ -332,13 +347,13 @@ class Runner:
 
     def get_sun_position(self):
         """
-        Compute sun position after checking that gps fix and datetime valid are ok
+        Compute sun position after checking that the active position source's fix and datetime are ok
         :return: True: if succeeded and False otherwise
         """
-        if self.gps.fix_ok and self.gps.datetime_valid and \
-                time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
-            self.sun_elevation, self.sun_azimuth = get_sun_position(self.gps.latitude, self.gps.longitude,
-                                                                    self.gps.datetime, self.gps.altitude)
+        source, position_fresh = self._position_source()
+        if source and source.fix_ok and source.datetime_valid and position_fresh:
+            self.sun_elevation, self.sun_azimuth = get_sun_position(source.latitude, source.longitude,
+                                                                    source.datetime, source.altitude)
             self.sun_position_timestamp = time()
             return True
         else:

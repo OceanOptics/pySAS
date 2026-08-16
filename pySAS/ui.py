@@ -394,9 +394,11 @@ settings_modal = dbc.Modal([
                                       "POS MV from ship navigation (edit config file manually and restart pySAS to enable)",
                              'value': 'posmv_heading', 'disabled': runner.posmv is None},
                         ]),
-            dbc.FormText('Source used to compute ship heading for autopilot steering, also logged in the '
-                         'UMTWR frames. Selecting POS MV requires a [POSMV] section in the configuration '
-                         'file and a pySAS restart -- it cannot be enabled from this menu alone.',
+            dbc.FormText('Source used for ship heading, sun position, clock sync, and the position logged '
+                         'in the raw files. Selecting POS MV makes pySAS independent of its own GPS '
+                         'antennas -- the onboard GPS keeps running but stops logging its own position, '
+                         'so only POS MV data ends up in the raw files. Requires a [POSMV] section in the '
+                         'configuration file and a pySAS restart -- it cannot be enabled from this menu alone.',
                          color='muted'),
         ], className="mb-3"),
         html.Div([
@@ -620,6 +622,10 @@ def save_settings(save_click, heading_source, prt, stb, gps, optimal_az, min_az,
     # Save Other settings
     runner.heading_source = heading_source
     runner.set_cfg_variable('Runner', 'heading_source', heading_source)
+    if heading_source == 'posmv_heading':
+        # Stop the onboard GPS's own $GPRMC logging immediately rather than waiting for the next
+        # wakeup()/run_manual() cycle, so raw files only get POS MV's position stream from now on
+        runner.gps.stop_logging()
     runner.pilot.set_tower_limits([prt, stb])
     runner.set_cfg_variable('AutoPilot', 'valid_indexing_table_orientation_limits', [prt, stb])
     runner.pilot.target = optimal_az

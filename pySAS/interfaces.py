@@ -723,6 +723,7 @@ class POSMV(Sensor):
         self.heading = float('nan')  # deg true, from INHDT/PASHR
         self.heading_accuracy = float('nan')  # deg, from PASHR
         self.packet_heading_received = float('nan')
+        self.packet_pvt_received = float('nan')  # named to match GPS.packet_pvt_received for generic access
         # Thread
         self._thread = None
         self.alive = False
@@ -811,6 +812,7 @@ class POSMV(Sensor):
                 if self._zda_date:
                     self.datetime = self._build_datetime(fields[1], self._zda_date)
                     self.datetime_valid = self.fix_ok
+                self.packet_pvt_received = timestamp
             elif sentence == 'INHDT':
                 self.heading = float(fields[1])
                 self.packet_heading_received = timestamp

@@ -765,11 +765,17 @@ class POSMV(Sensor):
             self.busy = False
 
     def run(self):
+        buffer = ''
         while self.alive:
             try:
                 data, _ = self._socket.recvfrom(4096)
                 timestamp = time()
-                for line in data.decode('ascii', errors='replace').splitlines():
+                # Longer sentences (e.g. $INGGA) can be split by the sender across multiple UDP
+                # datagrams, so accumulate a buffer across recvfrom() calls instead of assuming
+                # each datagram holds complete lines.
+                buffer += data.decode('ascii', errors='replace')
+                while '\n' in buffer:
+                    line, buffer = buffer.split('\n', 1)
                     self.handle_line(line, timestamp)
             except socket.timeout:
                 continue

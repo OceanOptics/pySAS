@@ -1,5 +1,6 @@
 from functools import reduce, wraps
 from operator import xor
+import socket
 
 from serial import Serial, SerialException
 from timeit import default_timer
@@ -677,6 +678,195 @@ class GPS(Sensor):
                                               self.altitude * 3.2808399, self.datetime.date()).dec
         mag_var_hm = 'W' if mag_var < 0 else 'E'
         mag_var =f'{abs(mag_var):05.1f}'
+        frame = (f'$GPRMC,{hhmmss},{valid},{lat_dd}{lat_mm},{lat_hm},{lon_ddd}{lon_mm},{lon_hm},'
+                 f'{speed},{course},{ddmmyy},{mag_var},{mag_var_hm}')
+        checksum = f'*{hex(reduce(xor, map(ord, frame[1:])))[2:]}\r\n'
+        return (frame + checksum).encode('ascii')
+
+
+class POSMV(Sensor):
+    """
+    Receives NMEA-like sentences (INGGA, INZDA, INHDT, PASHR, INVTG) broadcast over UDP by the
+    ship's Applanix POS MV, and converts them to a synthetic $GPRMC frame written to the shared
+    data logger, so downstream tools (prepSAS.py/HyperInSPACE) keep seeing a familiar $GPRMC frame.
+    heading/heading_accuracy (from INHDT/PASHR) can optionally be used by Runner.get_ship_heading()
+    as a more robust alternative to the RTK GPS relative heading.
+    """
+
+    def __init__(self, cfg, data_logger=None):
+        self.__logger = logging.getLogger(self.__class__.__name__)
+        self._host = cfg.get(self.__class__.__name__, 'host', fallback='0.0.0.0')
+        self._port = cfg.getint(self.__class__.__name__, 'port')
+        self._timeout = cfg.getfloat(self.__class__.__name__, 'timeout', fallback=5)
+        self.decimate = cfg.getint(self.__class__.__name__, 'decimate', fallback=1)
+        self._data_logger = data_logger if data_logger is not None else SatlanticLogger(
+            {'filename_prefix': self.__class__.__name__,
+             'path': cfg.get(self.__class__.__name__, 'path_to_data',
+                             fallback=os.path.join(os.path.dirname(__file__), 'data')),
+             'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
+        self._data_logger_lock = Lock()
+        self._log_data = False
+        self.counter = 0
+        self._socket = None
+        # Variables
+        self.datetime = None
+        self.datetime_valid = False
+        self._zda_date = None  # (day, month, year), from INZDA
+        self.latitude = float('nan')
+        self.longitude = float('nan')
+        self.altitude = float('nan')
+        self.fix_quality = 0
+        self.fix_ok = False
+        self.num_satellites = 0
+        self.speed = float('nan')  # m/s, course over ground speed from INVTG
+        self.course = float('nan')  # deg true, course over ground from INVTG
+        self.heading = float('nan')  # deg true, from INHDT/PASHR
+        self.heading_accuracy = float('nan')  # deg, from PASHR
+        self.packet_heading_received = float('nan')
+        # Thread
+        self._thread = None
+        self.alive = False
+        self.busy = False
+        atexit.register(self.stop)
+
+    def start(self):
+        try:
+            self.busy = True
+            if not self.alive:
+                self.__logger.debug('start')
+                try:
+                    self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    self._socket.settimeout(self._timeout)
+                    self._socket.bind((self._host, self._port))
+                except OSError as e:
+                    self.__logger.critical(e)
+                    return
+                self.alive = True
+                self._log_data = True
+                self._thread = Thread(name=self.__class__.__name__, target=self.run)
+                self._thread.daemon = True
+                self._thread.start()
+        finally:
+            self.busy = False
+
+    def stop(self, from_thread=False):
+        try:
+            self.busy = True
+            self.__logger.debug('stop')
+            if self.alive:
+                self.alive = False
+                if not from_thread:
+                    self._thread.join(2)
+                    if self._thread.is_alive():
+                        self.__logger.error('Thread did not join.')
+                self._socket.close()
+                self._data_logger.close()  # Required to start new log_data file when instrument restart
+        finally:
+            self.busy = False
+
+    def run(self):
+        while self.alive:
+            try:
+                data, _ = self._socket.recvfrom(4096)
+                timestamp = time()
+                for line in data.decode('ascii', errors='replace').splitlines():
+                    self.handle_line(line, timestamp)
+            except socket.timeout:
+                continue
+            except OSError as e:
+                self.__logger.error(e)
+                self.__logger.error('socket error, retrying')
+                sleep(1)
+            except Exception as e:
+                self.__logger.error(e)
+                sleep(1)
+
+    def handle_line(self, line, timestamp):
+        line = line.strip()
+        if not line or not line.startswith('$') or '*' not in line:
+            return
+        payload, _, checksum_str = line.rpartition('*')
+        checksum = f'{reduce(xor, map(ord, payload[1:])):02X}'
+        if checksum != checksum_str.strip().upper():
+            self.__logger.warning(f'Invalid checksum: {line}')
+            return
+        fields = payload.split(',')
+        sentence = fields[0][1:]  # strip leading $
+        try:
+            if sentence == 'INZDA':
+                self._zda_date = (int(fields[2]), int(fields[3]), int(fields[4]))
+            elif sentence == 'INGGA':
+                self.fix_quality = int(fields[6])
+                self.fix_ok = self.fix_quality > 0
+                self.num_satellites = int(fields[7])
+                self.latitude = self._parse_nmea_coordinate(fields[2], fields[3], 2)
+                self.longitude = self._parse_nmea_coordinate(fields[4], fields[5], 3)
+                self.altitude = float(fields[9])
+                if self._zda_date:
+                    self.datetime = self._build_datetime(fields[1], self._zda_date)
+                    self.datetime_valid = self.fix_ok
+            elif sentence == 'INHDT':
+                self.heading = float(fields[1])
+                self.packet_heading_received = timestamp
+            elif sentence == 'PASHR':
+                self.heading = float(fields[2])
+                self.heading_accuracy = float(fields[9])
+                self.packet_heading_received = timestamp
+            elif sentence == 'INVTG':
+                self.course = float(fields[1]) if fields[1] else float('nan')
+                self.speed = float(fields[5]) * 0.514444 if fields[5] else float('nan')  # knots to m/s
+                self._write_gprmc(timestamp)
+        except (ValueError, IndexError) as e:
+            self.__logger.warning(f'Unable to parse {sentence}: {e}')
+
+    @staticmethod
+    def _parse_nmea_coordinate(value, hemisphere, degree_digits):
+        degrees = float(value[:degree_digits])
+        minutes = float(value[degree_digits:])
+        decimal = degrees + minutes / 60
+        return -decimal if hemisphere in ('S', 'W') else decimal
+
+    @staticmethod
+    def _build_datetime(hhmmss, date_tuple):
+        day, month, year = date_tuple
+        hour, minute = int(hhmmss[0:2]), int(hhmmss[2:4])
+        second_full = float(hhmmss[4:])
+        second = int(second_full)
+        microsecond = round((second_full - second) * 1e6)
+        return datetime(year, month, day, hour, minute, second, microsecond, pytz.utc)
+
+    def _write_gprmc(self, timestamp):
+        if self.datetime is None or not self._log_data:
+            return
+        self.counter += 1
+        if not self.counter % self.decimate:
+            if self._data_logger_lock.acquire(timeout=0.5):
+                try:
+                    self._data_logger.write(self.format_data_as_gprmc(), timestamp)
+                finally:
+                    self._data_logger_lock.release()
+            else:
+                self.__logger.error('unable to acquire data_logger to write data')
+
+    def format_data_as_gprmc(self):
+        # Format following NMEA0183 GPRMC format, mirrors GPS.format_data_as_gprmc()
+        hhmmss = self.datetime.strftime('%H%M%S')
+        valid = 'A' if self.datetime_valid and self.fix_ok else 'V'
+        lat_dd = floor(abs(self.latitude))
+        lat_mm = f'{((abs(self.latitude) - lat_dd) * 60):07.4f}'
+        lat_dd = f'{lat_dd:02.0f}'
+        lat_hm = 'S' if self.latitude < 0 else 'N'
+        lon_ddd = floor(abs(self.longitude))
+        lon_mm = f'{((abs(self.longitude) - lon_ddd) * 60):07.4f}'
+        lon_ddd = f'{lon_ddd:03.0f}'
+        lon_hm = 'W' if self.longitude < 0 else 'E'
+        speed = f'{self.speed * 1.94384:05.1f}'  # Convert from m/s to knots
+        course = f'{self.course:05.1f}'
+        ddmmyy = self.datetime.strftime('%d%m%y')
+        mag_var = WORLD_MAGNETIC_MODEL.GeoMag(self.latitude, self.longitude,
+                                              self.altitude * 3.2808399, self.datetime.date()).dec
+        mag_var_hm = 'W' if mag_var < 0 else 'E'
+        mag_var = f'{abs(mag_var):05.1f}'
         frame = (f'$GPRMC,{hhmmss},{valid},{lat_dd}{lat_mm},{lat_hm},{lon_ddd}{lon_mm},{lon_hm},'
                  f'{speed},{course},{ddmmyy},{mag_var},{mag_var_hm}')
         checksum = f'*{hex(reduce(xor, map(ord, frame[1:])))[2:]}\r\n'

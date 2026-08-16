@@ -106,7 +106,8 @@ sidebar = html.Div([
                                   style={'lineHeight': 0.72}, className='mt-2 me-2'),
                         dbc.Switch(id="gps_switch", value=False, className='mt-2 ms-1 d-inline-block')],
                             width=9, className="text-end"),
-                    dbc.FormText(["Ship Heading (", HEADING_SOURCE_LABELS.get(runner.heading_source, runner.heading_source),
+                    dbc.FormText(["Ship Heading (", html.Span(HEADING_SOURCE_LABELS.get(runner.heading_source, runner.heading_source),
+                                                              id='heading_source_label'),
                                   "): ", html.Span("NA", 'gps_text_angle'), "°N"],
                                  id='gps_text', className='mt-0', color='muted'),
                 ], className="mb-3"),
@@ -385,6 +386,23 @@ settings_modal = dbc.Modal([
     dbc.ModalHeader(dbc.ModalTitle("pySAS Settings")),
     dbc.ModalBody([
         html.Div([
+            dbc.Label("Heading Source", html_for='heading_source_select'),
+            dcc.Dropdown(id='heading_source_select', searchable=False, clearable=False,
+                        options=[
+                            {'label': 'RTK (GPS relative position)', 'value': 'gps_relative_position'},
+                            {'label': 'GPS Motion', 'value': 'gps_motion'},
+                            {'label': 'GPS Vehicle', 'value': 'gps_vehicle'},
+                            {'label': 'THS (HyperSAS compass)', 'value': 'ths_heading'},
+                            {'label': 'POS MV' if runner.posmv else
+                                      'POS MV (edit config file manually and restart pySAS to enable)',
+                             'value': 'posmv_heading', 'disabled': runner.posmv is None},
+                        ]),
+            dbc.FormText('Source used to compute ship heading for autopilot steering, also logged in the '
+                         'UMTWR frames. Selecting POS MV requires a [POSMV] section in the configuration '
+                         'file and a pySAS restart -- it cannot be enabled from this menu alone.',
+                         color='muted'),
+        ], className="mb-3"),
+        html.Div([
             dbc.Label("GPS Orientation", html_for="gps_orientation"),
             dbc.InputGroup([
                 dbc.Input(id='gps_orientation', type='number', min=-180, max=360, step=1, class_name='text-end'),
@@ -507,7 +525,8 @@ def toggle_settings_modal(open_modal, close_modal, is_open):
     return not is_open
 
 
-@app.callback(Output('tower_valid_orientation_prt', 'value'), Output('tower_valid_orientation_stb', 'value'),
+@app.callback(Output('heading_source_select', 'value'),
+              Output('tower_valid_orientation_prt', 'value'), Output('tower_valid_orientation_stb', 'value'),
               Output('gps_orientation', 'value'),
               Output('optimal_sensors_azimuth', 'value'),
               Output('sensors_azimuth_min', 'value'), Output('sensors_azimuth_max', 'value'),
@@ -523,7 +542,8 @@ def get_settings(is_open):
     # Get device file used
     device_file_options, current_device_file = get_device_file_options()
     # Other parameters
-    return (*runner.pilot.tower_limits, runner.pilot.compass_zero,
+    return (runner.heading_source,
+            *runner.pilot.tower_limits, runner.pilot.compass_zero,
             runner.pilot.target, *runner.pilot.target_limits,
             runner.min_sun_elevation, runner.refresh_delay,
             device_file_options, current_device_file, 'light', False)
@@ -534,6 +554,7 @@ def get_settings(is_open):
               Output('fig_spectrum_cache', 'data', allow_duplicate=True),
               Output('fig_timeseries_cache', 'data', allow_duplicate=True),
               Input('settings_modal_save', 'n_clicks'),
+              State('heading_source_select', 'value'),
               State('tower_valid_orientation_prt', 'value'), State('tower_valid_orientation_stb', 'value'),
               State('gps_orientation', 'value'),
               State('optimal_sensors_azimuth', 'value'),
@@ -541,12 +562,16 @@ def get_settings(is_open):
               State('min_sun_elevation', 'value'),
               State('refresh_period', 'value'), State('select_device_file', 'value'),
               prevent_initial_call=True)
-def save_settings(save_click, prt, stb, gps, optimal_az, min_az, max_az, sun, period, device_file):
+def save_settings(save_click, heading_source, prt, stb, gps, optimal_az, min_az, max_az, sun, period, device_file):
     if not save_click:
         raise PreventUpdate
     # Reset figures cache
     fig_spectrum_cache, fig_timeseries_cache = None, None
     # Check Input
+    if heading_source == 'posmv_heading' and not runner.posmv:
+        return True, ('POS MV is not configured on this pySAS. Add a [POSMV] section to the '
+                      'configuration file and restart pySAS before selecting it here.'), 'danger', 3600000, \
+               fig_spectrum_cache, fig_timeseries_cache
     if gps is None or gps < -180 or gps > 360:
         return True, 'Invalid gps orientation. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     if prt is None or stb is None or prt < -180 or prt > 360 or stb < -180 or stb > 360:
@@ -594,6 +619,8 @@ def save_settings(save_click, prt, stb, gps, optimal_az, min_az, max_az, sun, pe
             logger.warning(e)
             return True, "Unable to import device file. " + str(e), 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     # Save Other settings
+    runner.heading_source = heading_source
+    runner.set_cfg_variable('Runner', 'heading_source', heading_source)
     runner.pilot.set_tower_limits([prt, stb])
     runner.set_cfg_variable('AutoPilot', 'valid_indexing_table_orientation_limits', [prt, stb])
     runner.pilot.target = optimal_az
@@ -930,6 +957,7 @@ fig_system_orientation = fig
 @app.callback(Output('fig_system_orientation', 'figure'),
               Output('gps_text_angle', 'children'),
               Output('tower_text_angle', 'children'),
+              Output('heading_source_label', 'children'),
               Input('status_refresh_interval', 'n_intervals'),
               Input('tower_orientation', 'value'),
               Input('settings_modal_save', 'n_clicks'))  # If Tower Orientation Range Updated
@@ -1014,7 +1042,8 @@ def get_fig_system_orientation(_0, _1, _2):
         if not (isnan(tower) or isnan(sun)):
             # Need tower adjusted to ship referential to compute angle with respect to the sun (need ship heading)
             tower_text = f'{abs(((tower - sun) + 180) % 360 - 180):.1f}'
-    return fig, gps_text, tower_text
+    heading_source_text = HEADING_SOURCE_LABELS.get(runner.heading_source, runner.heading_source)
+    return fig, gps_text, tower_text, heading_source_text
 
 
 fig = go.Figure()

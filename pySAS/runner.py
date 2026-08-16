@@ -8,7 +8,7 @@ import socket
 import atexit
 from subprocess import run
 from threading import Thread
-from pySAS.interfaces import IndexingTable, GPS, HyperSAS, Es, IMU
+from pySAS.interfaces import IndexingTable, GPS, HyperSAS, Es, IMU, POSMV
 from pySAS import WORLD_MAGNETIC_MODEL
 
 # pySolar
@@ -87,6 +87,9 @@ class Runner:
             self.es = Es(self.cfg, self.data_logger, parser=self.hypersas._parser)
         if 'IMU' in self.cfg.sections():
             self.imu = IMU(self.cfg, self.data_logger)
+        self.posmv = None
+        if 'POSMV' in self.cfg.sections():
+            self.posmv = POSMV(self.cfg, self.data_logger)
 
         # Set operation mode and start thread
         self.operation_mode = self.cfg.get('Runner', 'operation_mode', fallback='auto')
@@ -108,6 +111,8 @@ class Runner:
         if not self.alive:
             self.__logger.debug(f'start {mode}')
             self.gps.start()  # GPS is continuously running, could optimize to turn off at night and turn on every hour
+            if self.posmv:
+                self.posmv.start()  # POSMV is continuously running, like GPS
             self.alive = True
             self._thread = Thread(name=self.__class__.__name__,
                                   target=self.run_auto if mode == 'auto' else self.run_manual)
@@ -366,6 +371,11 @@ class Runner:
                                                                    self.gps.datetime, self.gps.altitude)
                 self.ship_heading = self.pilot.get_ship_heading(self.hypersas.compass_adj, self.indexing_table.get_position())
                 self.ship_heading_timestamp = self.hypersas.packet_THS_parsed
+                return True
+        elif self.heading_source == 'posmv_heading':
+            if self.posmv and time() - self.posmv.packet_heading_received < self.DATA_EXPIRED_DELAY:
+                self.ship_heading = self.pilot.get_ship_heading(self.posmv.heading)
+                self.ship_heading_timestamp = self.posmv.packet_heading_received
                 return True
         else:
             raise ValueError('Invalid heading source')

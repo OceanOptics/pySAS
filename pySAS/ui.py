@@ -112,6 +112,12 @@ sidebar = html.Div([
                                  id='gps_text', className='mt-0', color='muted'),
                     dbc.FormText(["Position: ", html.Span("NA", id='position_text_value')],
                                  id='position_text', className='mt-0', color='muted'),
+                    dbc.FormText(["Sun Azimuth: ", html.Span("NA", id='sun_azimuth_text_angle'), "°"],
+                                 id='sun_azimuth_text', className='mt-0', color='muted'),
+                    dbc.FormText(["Ship/Sun Diff: ", html.Span("NA", id='ship_sun_diff_text_angle'), "°  ",
+                                  dbc.Badge('Potential Ship Shadow on Lt', id='ship_shadow_warning',
+                                            color='danger', pill=True, className='d-none')],
+                                 id='ship_sun_diff_text', className='mt-0', color='muted'),
                 ], className="mb-3"),
                 dbc.Row([
                     dbc.Label("Tower", id='tower_label', html_for="tower_switch", width=4, style={'paddingRight': 0}),
@@ -966,6 +972,9 @@ fig_system_orientation = fig
               Output('tower_text_angle', 'children'),
               Output('heading_source_label', 'children'),
               Output('position_text_value', 'children'),
+              Output('sun_azimuth_text_angle', 'children'),
+              Output('ship_sun_diff_text_angle', 'children'),
+              Output('ship_shadow_warning', 'className'),
               Input('status_refresh_interval', 'n_intervals'),
               Input('tower_orientation', 'value'),
               Input('settings_modal_save', 'n_clicks'))  # If Tower Orientation Range Updated
@@ -1056,6 +1065,16 @@ def get_fig_system_orientation(_0, _1, _2):
         if not (isnan(tower) or isnan(sun)):
             # Need tower adjusted to ship referential to compute angle with respect to the sun (need ship heading)
             tower_text = f'{abs(((tower - sun) + 180) % 360 - 180):.1f}'
+    sun_azimuth_text = 'NA' if isnan(runner.sun_azimuth) else f'{runner.sun_azimuth:.1f}'
+    # Ship/Sun Diff: how close the sun is to being directly astern (~180 deg from ship heading),
+    # in which case the ship's own hull/superstructure may shadow the water Lt is looking at.
+    if isnan(ship) or isnan(runner.sun_azimuth):
+        ship_sun_diff_text = 'NA'
+        ship_shadow_class = 'd-none'
+    else:
+        ship_sun_diff = abs(((ship - runner.sun_azimuth) + 180) % 360 - 180)
+        ship_sun_diff_text = f'{ship_sun_diff:.1f}'
+        ship_shadow_class = 'ms-1' if ship_sun_diff >= 175 else 'd-none'
     heading_source_text = HEADING_SOURCE_LABELS.get(runner.heading_source, runner.heading_source)
     # Update Position (from the same source driving heading/sun position)
     if isnan(position_source.latitude) or isnan(position_source.longitude):
@@ -1064,7 +1083,8 @@ def get_fig_system_orientation(_0, _1, _2):
         lat_hm = 'S' if position_source.latitude < 0 else 'N'
         lon_hm = 'W' if position_source.longitude < 0 else 'E'
         position_text = f'{abs(position_source.latitude):.4f}°{lat_hm}, {abs(position_source.longitude):.4f}°{lon_hm}'
-    return fig, gps_text, tower_text, heading_source_text, position_text
+    return (fig, gps_text, tower_text, heading_source_text, position_text,
+            sun_azimuth_text, ship_sun_diff_text, ship_shadow_class)
 
 
 fig = go.Figure()

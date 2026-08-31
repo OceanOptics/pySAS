@@ -420,6 +420,19 @@ settings_modal = dbc.Modal([
                          'heading directly and ignores this setting. For details, see schematics inside '
                          'the pySAS controller box.', color='muted'),
         ], className="mb-3"),
+        html.Div([
+            dbc.Label("Tower Orientation", html_for="tower_orientation_on_ship"),
+            dbc.InputGroup([
+                dbc.Input(id='tower_orientation_on_ship', type='number', min=-180, max=360, step=1, class_name='text-end'),
+                dbc.InputGroupText("°")
+            ]),
+            dbc.FormText('Difference in azimuth between the indexing table\'s zero position and the ship\'s '
+                         'bow (physical mounting offset of the pySAS tower itself). Unlike GPS Orientation, '
+                         'this applies regardless of Heading Source, since it corrects ship_heading itself '
+                         'after it has already been resolved from RTK or POS MV. Adjust and observe the '
+                         'System Orientation plot to find the right sign/value for your installation.',
+                         color='muted'),
+        ], className="mb-3"),
         dbc.Row([
             dbc.Label("Tower Orientation Range", html_for="tower_valid_orientation_prt"),
             dbc.Col(
@@ -537,6 +550,7 @@ def toggle_settings_modal(open_modal, close_modal, is_open):
 @app.callback(Output('heading_source_select', 'value'),
               Output('tower_valid_orientation_prt', 'value'), Output('tower_valid_orientation_stb', 'value'),
               Output('gps_orientation', 'value'),
+              Output('tower_orientation_on_ship', 'value'),
               Output('optimal_sensors_azimuth', 'value'),
               Output('sensors_azimuth_min', 'value'), Output('sensors_azimuth_max', 'value'),
               Output('min_sun_elevation', 'value'),
@@ -553,6 +567,7 @@ def get_settings(is_open):
     # Other parameters
     return (runner.heading_source,
             *runner.pilot.tower_limits, runner.pilot.compass_zero,
+            runner.pilot.tower_zero,
             runner.pilot.target, *runner.pilot.target_limits,
             runner.min_sun_elevation, runner.refresh_delay,
             device_file_options, current_device_file, 'light', False)
@@ -566,12 +581,13 @@ def get_settings(is_open):
               State('heading_source_select', 'value'),
               State('tower_valid_orientation_prt', 'value'), State('tower_valid_orientation_stb', 'value'),
               State('gps_orientation', 'value'),
+              State('tower_orientation_on_ship', 'value'),
               State('optimal_sensors_azimuth', 'value'),
               State('sensors_azimuth_min', 'value'), State('sensors_azimuth_max', 'value'),
               State('min_sun_elevation', 'value'),
               State('refresh_period', 'value'), State('select_device_file', 'value'),
               prevent_initial_call=True)
-def save_settings(save_click, heading_source, prt, stb, gps, optimal_az, min_az, max_az, sun, period, device_file):
+def save_settings(save_click, heading_source, prt, stb, gps, tower_zero, optimal_az, min_az, max_az, sun, period, device_file):
     if not save_click:
         raise PreventUpdate
     # Reset figures cache
@@ -583,6 +599,8 @@ def save_settings(save_click, heading_source, prt, stb, gps, optimal_az, min_az,
                fig_spectrum_cache, fig_timeseries_cache
     if gps is None or gps < -180 or gps > 360:
         return True, 'Invalid gps orientation. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
+    if tower_zero is None or tower_zero < -180 or tower_zero > 360:
+        return True, 'Invalid tower orientation. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     if prt is None or stb is None or prt < -180 or prt > 360 or stb < -180 or stb > 360:
         return True, 'Invalid tower orientation range. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     if optimal_az is None or optimal_az < -180 or sun > 360:
@@ -642,6 +660,8 @@ def save_settings(save_click, heading_source, prt, stb, gps, optimal_az, min_az,
     runner.set_cfg_variable('AutoPilot', 'valid_angle_away_from_sun_limits', [min_az, max_az])
     runner.pilot.compass_zero = gps
     runner.set_cfg_variable('AutoPilot', 'gps_orientation_on_ship', gps)
+    runner.pilot.tower_zero = tower_zero
+    runner.set_cfg_variable('AutoPilot', 'indexing_table_orientation_on_ship', tower_zero)
     runner.min_sun_elevation = sun
     runner.set_cfg_variable('Runner', 'min_sun_elevation', sun)
     runner.refresh_delay = period

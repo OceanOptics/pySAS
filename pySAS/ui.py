@@ -1031,8 +1031,9 @@ def get_fig_system_orientation(_0, _1, _2):
         ship = runner.ship_heading
         # Adjust Tower to ship referencial
         tower = ship - runner.pilot.tower_zero + tower
-        # Adjust blind zone to ship referencial
-        blind_zone_center = ship + blind_zone_center
+        # Adjust blind zone to ship referencial (same tower_zero correction as the tower trace above,
+        # since tower_limits are expressed in the indexing table's own raw position frame)
+        blind_zone_center = ship - runner.pilot.tower_zero + blind_zone_center
     # Get sun
     sun = float('nan')
     if timestamp - runner.sun_position_timestamp < runner.DATA_EXPIRED_DELAY and runner.sun_elevation > 0:

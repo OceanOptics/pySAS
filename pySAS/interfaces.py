@@ -705,8 +705,12 @@ class POSMV(Sensor):
                              fallback=os.path.join(os.path.dirname(__file__), 'data')),
              'length': cfg.getint(self.__class__.__name__, 'file_length', fallback=60)})
         self._data_logger_lock = Lock()
-        self._log_data = False
+        self._log_data = False  # gates $GPRMC writing, follows heading_source
+        self._log_attitude = False  # gates SATTHS-like pitch/roll writing, follows motion_source
         self.counter = 0
+        self.attitude_counter = 0
+        self.serial_number = cfg.getint(self.__class__.__name__, 'serial_number', fallback=1501)
+        self.t0 = time()
         self._socket = None
         # Variables
         self.datetime = None
@@ -722,6 +726,10 @@ class POSMV(Sensor):
         self.course = float('nan')  # deg true, course over ground from INVTG
         self.heading = float('nan')  # deg true, from INHDT/PASHR
         self.heading_accuracy = float('nan')  # deg, from PASHR
+        self.roll = float('nan')  # deg, from PASHR
+        self.pitch = float('nan')  # deg, from PASHR
+        self.roll_accuracy = float('nan')  # deg, from PASHR
+        self.pitch_accuracy = float('nan')  # deg, from PASHR
         self.packet_heading_received = float('nan')
         self.packet_pvt_received = float('nan')  # named to match GPS.packet_pvt_received for generic access
         # Thread
@@ -818,8 +826,13 @@ class POSMV(Sensor):
                 self.packet_heading_received = timestamp
             elif sentence == 'PASHR':
                 self.heading = float(fields[2])
+                self.roll = float(fields[4])
+                self.pitch = float(fields[5])
+                self.roll_accuracy = float(fields[7])
+                self.pitch_accuracy = float(fields[8])
                 self.heading_accuracy = float(fields[9])
                 self.packet_heading_received = timestamp
+                self._write_attitude(timestamp)
             elif sentence == 'INVTG':
                 self.course = float(fields[1]) if fields[1] else float('nan')
                 self.speed = float(fields[5]) * 0.514444 if fields[5] else float('nan')  # knots to m/s
@@ -880,6 +893,26 @@ class POSMV(Sensor):
         checksum = f'*{hex(reduce(xor, map(ord, frame[1:])))[2:]}\r\n'
         return (frame + checksum).encode('ascii')
 
+    def _write_attitude(self, timestamp):
+        if not self._log_attitude:
+            return
+        self.attitude_counter += 1
+        if not self.attitude_counter % self.decimate:
+            if self._data_logger_lock.acquire(timeout=0.5):
+                try:
+                    self._data_logger.write(self.format_data_as_satths(), timestamp)
+                finally:
+                    self._data_logger_lock.release()
+            else:
+                self.__logger.error('unable to acquire data_logger to write attitude data')
+
+    def format_data_as_satths(self):
+        # Format following output of Satlantic Tilt/Heading Sensor, mirrors IMU.format_data_as_satths(),
+        # so downstream tools reading pitch/roll from a SATTHS frame keep working when POS MV is the
+        # selected motion_source instead of the IMU
+        return (f'SATTHS{self.serial_number:04d},{self.attitude_counter},{timestamp - self.t0:07.2f}'
+                f',{self.heading:.1f},{self.pitch:.1f},{self.roll:.1f}\x0D\x0A').encode('ascii')
+
 
 class IMU(Sensor):
     """
@@ -909,6 +942,7 @@ class IMU(Sensor):
         #                          'variable_units': ['deg', 'deg', 'deg', 'm/s^2', 'm/s^2', 'm/s^2'],
         #                          'variable_precision': ['%.2f', '%.2f', '%.2f', '%.5f','%.5f', '%.5f']})
         self.decimate = cfg.getint(self.__class__.__name__, 'decimate', fallback=10)
+        self._log_data = True  # gates SATTHS-like pitch/roll writing, follows motion_source
         self.separator = b'\xAA\xAA'
         self.separator_len = len(self.separator)
         # Variables
@@ -958,7 +992,7 @@ class IMU(Sensor):
         if isnan(self.yaw):
             return
         # Write parsed data
-        if not self.counter % self.decimate:
+        if self._log_data and not self.counter % self.decimate:
             self._data_logger.write(self.format_data(), timestamp)
 
     def format_data_as_list(self):

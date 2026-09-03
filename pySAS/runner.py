@@ -45,6 +45,7 @@ class Runner:
 
         # Runner states
         self.heading_source = self.cfg.get(self.__class__.__name__, 'heading_source', fallback='gps_relative_position')
+        self.motion_source = self.cfg.get(self.__class__.__name__, 'motion_source', fallback='ths')
         self.min_sun_elevation = self.cfg.getfloat(self.__class__.__name__, 'min_sun_elevation', fallback=20)
         self.start_sleep_timestamp = None
         self.stop_sleep_timestamp = None
@@ -91,6 +92,12 @@ class Runner:
         self.posmv = None
         if 'POSMV' in self.cfg.sections():
             self.posmv = POSMV(self.cfg, self.data_logger)
+        # Sync pitch/roll raw-logging flags with the configured motion_source (THS itself needs no
+        # flag: it's part of HyperSAS's own native frame stream, always written when HyperSAS is on)
+        if self.imu:
+            self.imu._log_data = self.motion_source == 'imu'
+        if self.posmv:
+            self.posmv._log_attitude = self.motion_source == 'posmv'
 
         # Set operation mode and start thread
         self.operation_mode = self.cfg.get('Runner', 'operation_mode', fallback='auto')

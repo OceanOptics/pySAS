@@ -40,6 +40,12 @@ HEADING_SOURCE_LABELS = {
     'posmv_heading': 'POS MV',
 }
 
+MOTION_SOURCE_LABELS = {
+    'ths': 'THS',
+    'imu': 'IMU',
+    'posmv': 'POS MV',
+}
+
 app = dash.Dash(
     '__main__',
     title= "pySAS v" + __version__, update_title=None,
@@ -433,6 +439,22 @@ settings_modal = dbc.Modal([
                          'System Orientation plot to find the right sign/value for your installation.',
                          color='muted'),
         ], className="mb-3"),
+        html.Div([
+            dbc.Label("Motion Source", html_for='motion_source_select'),
+            dcc.Dropdown(id='motion_source_select', searchable=False, clearable=False,
+                        options=[
+                            {'label': 'THS (HyperSAS compass/tilt)', 'value': 'ths'},
+                            {'label': 'IMU' if runner.imu else 'IMU (requires [IMU] section and restart to enable)',
+                             'value': 'imu', 'disabled': runner.imu is None},
+                            {'label': 'POS MV' if runner.posmv else
+                                      'POS MV (requires [POSMV] section and restart to enable)',
+                             'value': 'posmv', 'disabled': runner.posmv is None},
+                        ]),
+            dbc.FormText('Pitch/roll source shown in the timeseries plot and logged to the raw files '
+                         '(as a SATTHS frame for IMU/POS MV). Independent of Heading Source -- e.g. you '
+                         'can use POS MV for heading and still display THS pitch/roll, or vice versa.',
+                         color='muted'),
+        ], className="mb-3"),
         dbc.Row([
             dbc.Label("Tower Orientation Range", html_for="tower_valid_orientation_prt"),
             dbc.Col(
@@ -548,6 +570,7 @@ def toggle_settings_modal(open_modal, close_modal, is_open):
 
 
 @app.callback(Output('heading_source_select', 'value'),
+              Output('motion_source_select', 'value'),
               Output('tower_valid_orientation_prt', 'value'), Output('tower_valid_orientation_stb', 'value'),
               Output('gps_orientation', 'value'),
               Output('tower_orientation_on_ship', 'value'),
@@ -566,6 +589,7 @@ def get_settings(is_open):
     device_file_options, current_device_file = get_device_file_options()
     # Other parameters
     return (runner.heading_source,
+            runner.motion_source,
             *runner.pilot.tower_limits, runner.pilot.compass_zero,
             runner.pilot.tower_zero,
             runner.pilot.target, *runner.pilot.target_limits,
@@ -579,6 +603,7 @@ def get_settings(is_open):
               Output('fig_timeseries_cache', 'data', allow_duplicate=True),
               Input('settings_modal_save', 'n_clicks'),
               State('heading_source_select', 'value'),
+              State('motion_source_select', 'value'),
               State('tower_valid_orientation_prt', 'value'), State('tower_valid_orientation_stb', 'value'),
               State('gps_orientation', 'value'),
               State('tower_orientation_on_ship', 'value'),
@@ -587,13 +612,21 @@ def get_settings(is_open):
               State('min_sun_elevation', 'value'),
               State('refresh_period', 'value'), State('select_device_file', 'value'),
               prevent_initial_call=True)
-def save_settings(save_click, heading_source, prt, stb, gps, tower_zero, optimal_az, min_az, max_az, sun, period, device_file):
+def save_settings(save_click, heading_source, motion_source, prt, stb, gps, tower_zero, optimal_az, min_az, max_az, sun, period, device_file):
     if not save_click:
         raise PreventUpdate
     # Reset figures cache
     fig_spectrum_cache, fig_timeseries_cache = None, None
     # Check Input
     if heading_source == 'posmv_heading' and not runner.posmv:
+        return True, ('POS MV is not configured on this pySAS. Add a [POSMV] section to the '
+                      'configuration file and restart pySAS before selecting it here.'), 'danger', 3600000, \
+               fig_spectrum_cache, fig_timeseries_cache
+    if motion_source == 'imu' and not runner.imu:
+        return True, ('IMU is not configured on this pySAS. Add an [IMU] section to the '
+                      'configuration file and restart pySAS before selecting it here.'), 'danger', 3600000, \
+               fig_spectrum_cache, fig_timeseries_cache
+    if motion_source == 'posmv' and not runner.posmv:
         return True, ('POS MV is not configured on this pySAS. Add a [POSMV] section to the '
                       'configuration file and restart pySAS before selecting it here.'), 'danger', 3600000, \
                fig_spectrum_cache, fig_timeseries_cache
@@ -652,6 +685,12 @@ def save_settings(save_click, heading_source, prt, stb, gps, tower_zero, optimal
         # Stop the onboard GPS's own $GPRMC logging immediately rather than waiting for the next
         # wakeup()/run_manual() cycle, so raw files only get POS MV's position stream from now on
         runner.gps.stop_logging()
+    runner.motion_source = motion_source
+    runner.set_cfg_variable('Runner', 'motion_source', motion_source)
+    if runner.imu:
+        runner.imu._log_data = motion_source == 'imu'
+    if runner.posmv:
+        runner.posmv._log_attitude = motion_source == 'posmv'
     runner.pilot.set_tower_limits([prt, stb])
     runner.set_cfg_variable('AutoPilot', 'valid_indexing_table_orientation_limits', [prt, stb])
     runner.pilot.target = optimal_az
@@ -1188,19 +1227,13 @@ def get_fig_spectrum(_, cache):
 
 
 fig = go.Figure()
-imu_pitch_id = 0
-fig.add_scatter(x=[], y=[], name='Pitch (IMU)', marker_color='green', mode='lines+markers',
+pitch_id = 0
+fig.add_scatter(x=[], y=[], name='Pitch (THS)', marker_color='green', mode='lines+markers',
                 visible=False)
-imu_roll_id = 1
-fig.add_scatter(x=[], y=[], name='Roll (IMU)', marker_color='green', line_dash='dash', mode='lines+markers',
+roll_id = 1
+fig.add_scatter(x=[], y=[], name='Roll (THS)', marker_color='green', line_dash='dash', mode='lines+markers',
                 visible=False)
-ths_pitch_id = 2
-fig.add_scatter(x=[], y=[], name='Pitch (THS)', marker_color='gray', mode='lines+markers',
-                visible=False)
-ths_roll_id = 3
-fig.add_scatter(x=[], y=[], name='Roll (THS)', marker_color='gray', line_dash='dash', mode='lines+markers',
-                visible=False)
-es_490_id = 4
+es_490_id = 2
 fig.add_scatter(x=[], y=[], yaxis='y2', name='Es(490) (&mu;W/cm<sup>2</sup>/nm)',
                 marker_color='orange', mode='lines+markers', visible=False)
 
@@ -1216,16 +1249,32 @@ fig.update_layout(
 fig_timeseries = fig
 
 
+def get_motion_source():
+    """
+    Pitch/roll source following runner.motion_source (independent of heading_source).
+    :return: (packet_timestamp, packet_received, pitch, roll)
+    """
+    if runner.motion_source == 'imu' and runner.imu:
+        return (runner.imu.packet_received, runner.imu.packet_received,
+                runner.imu.pitch, runner.imu.roll)
+    elif runner.motion_source == 'posmv' and runner.posmv:
+        return (runner.posmv.packet_heading_received, runner.posmv.packet_heading_received,
+                runner.posmv.pitch, runner.posmv.roll)
+    else:  # 'ths' default/fallback
+        return (runner.hypersas.packet_THS_parsed, runner.hypersas._packet_THS_received,
+                runner.hypersas.pitch, runner.hypersas.roll)
+
+
 @app.callback(Output('fig_timeseries', 'figure'), Output('fig_timeseries_cache', 'data', allow_duplicate=True),
               Input('hypersas_reading_interval', 'n_intervals'),
               State('fig_timeseries_cache', 'data'), prevent_initial_call=True)
 def get_fig_timeseries(_, cache):
     fig = Patch()
     timestamp = time()
-    max_points = [120, 120, 60, 60, 90]
+    max_points = [120, 120, 90]
     if not cache:
-        count, last_timestamp = [0] * 5, [0] * 5
-        for id in range(5):
+        count, last_timestamp = [0] * 3, [0] * 3
+        for id in range(3):
             fig['data'][id]['x'] = []
             fig['data'][id]['y'] = []
     else:
@@ -1250,17 +1299,13 @@ def get_fig_timeseries(_, cache):
         else:
             fig['data'][id]['visible'] = False
 
-    # Get THS Heading
-    set_patch(runner.hypersas.packet_THS_parsed, runner.hypersas._packet_THS_received,
-              runner.hypersas.pitch, ths_pitch_id)
-    set_patch(runner.hypersas.packet_THS_parsed, runner.hypersas._packet_THS_received,
-              runner.hypersas.roll, ths_roll_id)
-    # Get IMU Heading
-    if runner.imu:
-        set_patch(runner.imu.packet_received, runner.imu.packet_received,
-                  runner.imu.pitch, imu_pitch_id)
-        set_patch(runner.imu.packet_received, runner.imu.packet_received,
-                  runner.imu.roll, imu_roll_id)
+    # Get Pitch/Roll from the active motion source
+    rx, dt, pitch, roll = get_motion_source()
+    motion_source_label = MOTION_SOURCE_LABELS.get(runner.motion_source, runner.motion_source)
+    fig['data'][pitch_id]['name'] = f'Pitch ({motion_source_label})'
+    fig['data'][roll_id]['name'] = f'Roll ({motion_source_label})'
+    set_patch(rx, dt, pitch, pitch_id)
+    set_patch(rx, dt, roll, roll_id)
     # Get Es(490)
     if runner.es:
         if runner.es.Es is not None:

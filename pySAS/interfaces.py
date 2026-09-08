@@ -932,12 +932,12 @@ class HyperOCR(Sensor):
             self.Lt_wavelength = [float(self._parser.cal[Lt_frame_header].id[i])
                                   for i in self._parser.cal[Lt_frame_header].core_variables]
         else:
-            self.Es_wavelength = float('nan')
+            self.Lt_wavelength = float('nan')
         if Li_frame_header:
             self.Li_wavelength = [float(self._parser.cal[Li_frame_header].id[i])
                                   for i in self._parser.cal[Li_frame_header].core_variables]
         else:
-            self.Es_wavelength = float('nan')
+            self.Li_wavelength = float('nan')
         if Es_frame_header:
             self.Es_wavelength = [float(self._parser.cal[Es_frame_header].id[i])
                                   for i in self._parser.cal[Es_frame_header].core_variables]

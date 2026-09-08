@@ -99,6 +99,9 @@ sidebar = html.Div([
                             width=9, className="text-end"),
                     dbc.FormText(["Ship Heading: ", html.Span("NA", 'gps_text_angle'), "°N"],
                                  id='gps_text', className='mt-0', color='muted'),
+                    dbc.FormText(["Sun Elevation (Threshold = ", html.Span("NA", id='sun_elevation_threshold'), "°): ",
+                                  html.Span("NA", id='sun_elevation_text_angle'), "°"],
+                                 id='sun_elevation_text', className='mt-0', color='muted'),
                 ], className="mb-3"),
                 dbc.Row([
                     dbc.Label("Tower", id='tower_label', html_for="tower_switch", width=4, style={'paddingRight': 0}),
@@ -871,6 +874,9 @@ def reboot(button_value):
 graph_config = {'displaylogo': False, 'editable': False, 'displayModeBar': True, 'showTips': False,
                 'modeBarButtonsToRemove': ['lasso2d', 'toImage', 'zoom', 'pan', 'select', 'zoomIn', 'zoomOut', 'resetScale']}   # 'autoScale',
 
+# Sky-water reflectance factor for NRT display, see [Rrs] section in pysas_cfg.ini
+RHO_SKY = runner.cfg.getfloat('Rrs', 'rho_sky', fallback=0.023)
+
 plotly_template = pio_templates["simple_white"]
 plotly_template.layout.font.family = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"'
 plotly_template.layout.xaxis.mirror = True
@@ -920,6 +926,8 @@ fig_system_orientation = fig
 @app.callback(Output('fig_system_orientation', 'figure'),
               Output('gps_text_angle', 'children'),
               Output('tower_text_angle', 'children'),
+              Output('sun_elevation_text_angle', 'children'),
+              Output('sun_elevation_threshold', 'children'),
               Input('status_refresh_interval', 'n_intervals'),
               Input('tower_orientation', 'value'),
               Input('settings_modal_save', 'n_clicks'))  # If Tower Orientation Range Updated
@@ -1004,7 +1012,13 @@ def get_fig_system_orientation(_0, _1, _2):
         if not (isnan(tower) or isnan(sun)):
             # Need tower adjusted to ship referential to compute angle with respect to the sun (need ship heading)
             tower_text = f'{abs(((tower - sun) + 180) % 360 - 180):.1f}'
-    return fig, gps_text, tower_text
+    # Update Sun Elevation
+    # No freshness guard here: in auto mode the runner stops refreshing sun position while
+    # asleep (up to ASLEEP_INTERRUPT = 120s), well beyond DATA_EXPIRED_DELAY, but the last
+    # computed value is still meaningful and should stay visible instead of showing NA.
+    sun_elevation_text = 'NA' if isnan(runner.sun_elevation) else f'{runner.sun_elevation:.1f}'
+    sun_elevation_threshold_text = f'{runner.min_sun_elevation:.0f}'
+    return fig, gps_text, tower_text, sun_elevation_text, sun_elevation_threshold_text
 
 
 fig = go.Figure()
@@ -1012,8 +1026,8 @@ lt_id = 0
 fig.add_scatter(x=[0, 1], y=[0, 1], name='Lt (&mu;W/cm<sup>2</sup>/nm/sr)', marker_color='#37536d', mode='lines',
                 visible=False)
 li_id = 1
-fig.add_scatter(x=[0, 1], y=[0, 1], name='Li (&mu;W/cm<sup>2</sup>/nm/sr)', marker_color='#1a76ff', mode='lines',
-                visible=False)
+fig.add_scatter(x=[0, 1], y=[0, 1], name='ρ<sub>sky</sub>·Li (&mu;W/cm<sup>2</sup>/nm/sr)',
+                marker_color='#1a76ff', mode='lines', visible=False)
 es_id = 2
 fig.add_scatter(x=[0, 1], y=[0, 1], yaxis='y2', name='Es (&mu;W/cm<sup>2</sup>/nm)', marker_color='orange', mode='lines',
                 visible=False)
@@ -1062,7 +1076,7 @@ def get_fig_spectrum(_, cache):
         if cache[li_id] is False:
             fig['data'][li_id]['x'] = runner.hypersas.Li_wavelength
             cache[li_id] = True
-        fig['data'][li_id]['y'] = runner.hypersas.Li
+        fig['data'][li_id]['y'] = RHO_SKY * np.asarray(runner.hypersas.Li)
     else:
         fig['data'][li_id]['visible'] = False
     if runner.es:
@@ -1084,6 +1098,56 @@ def get_fig_spectrum(_, cache):
         else:
             fig['data'][es_id]['visible'] = False
     return fig, cache
+
+
+fig = go.Figure()
+rrs_id = 0
+fig.add_scatter(x=[0, 1], y=[0, 1], name='Rrs (sr<sup>-1</sup>)', marker_color='#37536d', mode='lines',
+                visible=False)
+
+fig.update_layout(
+    title='Rrs = (Lt - ρ<sub>sky</sub>·Li) / Ed', title_x=0.5,
+    showlegend=False,
+    margin=dict(l=20, r=20, t=80, b=40),
+    xaxis=dict(title=dict(text='Wavelength (nm)'), exponentformat='power', showgrid=True),
+    yaxis=dict(title=dict(text='Rrs (sr<sup>-1</sup>)'), showgrid=True, exponentformat='power'),
+)
+fig_rrs = fig
+
+
+@app.callback(Output('fig_rrs', 'figure'),
+              Input('hypersas_reading_interval', 'n_intervals'), prevent_initial_call=True)
+def get_fig_rrs(_):
+    # On-the-fly NRT Rrs estimate: Rrs = (Lt - rho_sky*Li) / Ed. Li and Ed are interpolated
+    # onto the Lt wavelength grid, as the three channels are not guaranteed to share one.
+    # This is a rough approximation (constant rho_sky, no other corrections) for NRT display
+    # only -- the precise Rrs is computed by HyperCP in post-processing.
+    fig = Patch()
+    if not runner.hypersas.alive:
+        fig['data'][rrs_id]['visible'] = False
+        return fig
+    timestamp = time()
+    runner.hypersas.parse_packets()
+    if runner.es:
+        runner.es.parse_packets()
+        es, es_wavelength, es_parsed = runner.es.Es, runner.es.Es_wavelength, runner.es.packet_Es_parsed
+    else:
+        es, es_wavelength, es_parsed = runner.hypersas.Es, runner.hypersas.Es_wavelength, runner.hypersas.packet_Es_parsed
+    lt_fresh = runner.hypersas.Lt is not None and timestamp - runner.hypersas.packet_Lt_parsed < runner.DATA_EXPIRED_DELAY
+    li_fresh = runner.hypersas.Li is not None and timestamp - runner.hypersas.packet_Li_parsed < runner.DATA_EXPIRED_DELAY
+    es_fresh = es is not None and timestamp - es_parsed < runner.DATA_EXPIRED_DELAY
+    if lt_fresh and li_fresh and es_fresh:
+        lt_wavelength = np.asarray(runner.hypersas.Lt_wavelength)
+        li_interp = np.interp(lt_wavelength, runner.hypersas.Li_wavelength, np.asarray(runner.hypersas.Li))
+        es_interp = np.interp(lt_wavelength, es_wavelength, np.asarray(es))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            rrs = (np.asarray(runner.hypersas.Lt) - RHO_SKY * li_interp) / es_interp
+        fig['data'][rrs_id]['visible'] = True
+        fig['data'][rrs_id]['x'] = lt_wavelength
+        fig['data'][rrs_id]['y'] = rrs
+    else:
+        fig['data'][rrs_id]['visible'] = False
+    return fig
 
 
 fig = go.Figure()
@@ -1184,7 +1248,9 @@ content = html.Div([
     ]),
     dbc.Row([
         dbc.Col([dcc.Graph(figure=fig_timeseries, id='fig_timeseries',
-                           style={'height': '50vh'}, config=graph_config)], width=12),
+                           style={'height': '50vh'}, config=graph_config)], md=6, sm=12, xs=12),
+        dbc.Col([dcc.Graph(figure=fig_rrs, id='fig_rrs',
+                           style={'height': '50vh'}, config=graph_config)], md=6, sm=12, xs=12),
         dcc.Store(id='fig_timeseries_cache'),
     ]),
 ], id="page-content")

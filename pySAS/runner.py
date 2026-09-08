@@ -8,7 +8,7 @@ import socket
 import atexit
 from subprocess import run
 from threading import Thread
-from pySAS.interfaces import IndexingTable, GPS, HyperSAS, Es, IMU
+from pySAS.interfaces import IndexingTable, GPS, HyperSAS, Es, IMU, POSMV
 from pySAS import WORLD_MAGNETIC_MODEL
 
 # pySolar
@@ -45,6 +45,7 @@ class Runner:
 
         # Runner states
         self.heading_source = self.cfg.get(self.__class__.__name__, 'heading_source', fallback='gps_relative_position')
+        self.motion_source = self.cfg.get(self.__class__.__name__, 'motion_source', fallback='ths')
         self.min_sun_elevation = self.cfg.getfloat(self.__class__.__name__, 'min_sun_elevation', fallback=20)
         self.start_sleep_timestamp = None
         self.stop_sleep_timestamp = None
@@ -53,6 +54,7 @@ class Runner:
         self.sun_azimuth = float('nan')
         self.sun_position_timestamp = float('nan')
         self.ship_heading = float('nan')
+        self.ship_heading_accuracy = float('nan')
         self.ship_heading_timestamp = float('nan')
         self.interrupt_from_ui = False
         self.reboot_from_ui = False
@@ -87,6 +89,15 @@ class Runner:
             self.es = Es(self.cfg, self.data_logger, parser=self.hypersas._parser)
         if 'IMU' in self.cfg.sections():
             self.imu = IMU(self.cfg, self.data_logger)
+        self.posmv = None
+        if 'POSMV' in self.cfg.sections():
+            self.posmv = POSMV(self.cfg, self.data_logger)
+        # Sync pitch/roll raw-logging flags with the configured motion_source (THS itself needs no
+        # flag: it's part of HyperSAS's own native frame stream, always written when HyperSAS is on)
+        if self.imu:
+            self.imu._log_data = self.motion_source == 'imu'
+        if self.posmv:
+            self.posmv._log_attitude = self.motion_source == 'posmv'
 
         # Set operation mode and start thread
         self.operation_mode = self.cfg.get('Runner', 'operation_mode', fallback='auto')
@@ -108,6 +119,8 @@ class Runner:
         if not self.alive:
             self.__logger.debug(f'start {mode}')
             self.gps.start()  # GPS is continuously running, could optimize to turn off at night and turn on every hour
+            if self.posmv:
+                self.posmv.start()  # POSMV is continuously running, like GPS
             self.alive = True
             self._thread = Thread(name=self.__class__.__name__,
                                   target=self.run_auto if mode == 'auto' else self.run_manual)
@@ -231,8 +244,10 @@ class Runner:
                     self.gps.stop_logging()
                     self._wait(iteration_timestamp)
                     continue
-                # Turn on GPS logging (step does nothing if already on)
-                self.gps.start_logging()
+                # Turn on GPS logging (step does nothing if already on), unless POS MV is the active
+                # position source -- avoid writing two independent $GPRMC streams to the raw files
+                if self.heading_source != 'posmv_heading':
+                    self.gps.start_logging()
                 # Write Tower Data (requires gps, sun position, and tower position)
                 self.data_logger.write(*self.make_umtwr_frame())
             except Exception as e:
@@ -298,7 +313,10 @@ class Runner:
                 if not self.internet and not self.hypersas.alive:
                     self.get_time_sync()
                 self.indexing_table.start()
-                self.gps.start_logging()
+                # Avoid writing two independent $GPRMC streams to the raw files when POS MV is the
+                # active position source
+                if self.heading_source != 'posmv_heading':
+                    self.gps.start_logging()
                 if self.es:
                     self.es.start()
                 if self.imu:
@@ -307,15 +325,25 @@ class Runner:
                 self.asleep = False
         self.start_sleep_timestamp = None  # Reset sleep timer, in any case to stay up for as long as possible
 
+    def _position_source(self):
+        """
+        Position/time source to use for sun position and time sync, following heading_source so
+        pySAS can run fully off POS MV (position, heading, and time) without the onboard GPS.
+        :return: (source, position_fresh) where source is self.posmv or self.gps
+        """
+        if self.heading_source == 'posmv_heading':
+            return self.posmv, bool(self.posmv) and time() - self.posmv.packet_pvt_received < self.DATA_EXPIRED_DELAY
+        return self.gps, time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY
+
     def get_time_sync(self):
         """
-        Sync system time to GPS, override used if time has already been synced
+        Sync system time to the active position source, override used if time has already been synced
         """
-        if self.gps.fix_ok and self.gps.datetime_valid and \
-                time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
+        source, position_fresh = self._position_source()
+        if source and source.fix_ok and source.datetime_valid and position_fresh:
             pre_sync = time()
-            delta = timedelta(seconds=(pre_sync - self.gps.packet_pvt_received))
-            run(("date", "-s", str((self.gps.datetime+delta).isoformat())))
+            delta = timedelta(seconds=(pre_sync - source.packet_pvt_received))
+            run(("date", "-s", str((source.datetime+delta).isoformat())))
             self.time_synced = time()
             self.__logger.info("Time synchronized. From %s to %s" % (strftime('%Y/%m/%d %H:%M:%S', gmtime(pre_sync)),
                                strftime('%Y/%m/%d %H:%M:%S', gmtime(self.time_synced))))
@@ -326,13 +354,13 @@ class Runner:
 
     def get_sun_position(self):
         """
-        Compute sun position after checking that gps fix and datetime valid are ok
+        Compute sun position after checking that the active position source's fix and datetime are ok
         :return: True: if succeeded and False otherwise
         """
-        if self.gps.fix_ok and self.gps.datetime_valid and \
-                time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
-            self.sun_elevation, self.sun_azimuth = get_sun_position(self.gps.latitude, self.gps.longitude,
-                                                                    self.gps.datetime, self.gps.altitude)
+        source, position_fresh = self._position_source()
+        if source and source.fix_ok and source.datetime_valid and position_fresh:
+            self.sun_elevation, self.sun_azimuth = get_sun_position(source.latitude, source.longitude,
+                                                                    source.datetime, source.altitude)
             self.sun_position_timestamp = time()
             return True
         else:
@@ -346,16 +374,19 @@ class Runner:
         if self.heading_source == 'gps_relative_position':
             if self.gps.heading_valid and time() - self.gps.packet_relposned_received < self.DATA_EXPIRED_DELAY:
                 self.ship_heading = self.pilot.get_ship_heading(self.gps.heading)
+                self.ship_heading_accuracy = self.gps.heading_accuracy
                 self.ship_heading_timestamp = self.gps.packet_relposned_received
                 return True
         elif self.heading_source == 'gps_motion':
             if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
                 self.ship_heading = self.pilot.get_ship_heading(self.gps.heading_motion)  # TODO Check if need compass orientation correction
+                self.ship_heading_accuracy = float('nan')
                 self.ship_heading_timestamp = self.gps.packet_pvt_received
                 return True
         elif self.heading_source == 'gps_vehicle':
             if self.gps.fix_ok and time() - self.gps.packet_pvt_received < self.DATA_EXPIRED_DELAY:
                 self.ship_heading = self.pilot.get_ship_heading(self.gps.heading_vehicle)  # TODO Check if need compass orientation correction
+                self.ship_heading_accuracy = self.gps.heading_vehicle_accuracy
                 self.ship_heading_timestamp = self.gps.packet_pvt_received
                 return True
         elif self.heading_source == 'ths_heading':
@@ -365,17 +396,28 @@ class Runner:
                                                                    self.gps.latitude, self.gps.longitude,
                                                                    self.gps.datetime, self.gps.altitude)
                 self.ship_heading = self.pilot.get_ship_heading(self.hypersas.compass_adj, self.indexing_table.get_position())
+                self.ship_heading_accuracy = float('nan')
                 self.ship_heading_timestamp = self.hypersas.packet_THS_parsed
+                return True
+        elif self.heading_source == 'posmv_heading':
+            if self.posmv and time() - self.posmv.packet_heading_received < self.DATA_EXPIRED_DELAY:
+                # POS MV reports the ship's true heading directly (already aided/calibrated to the
+                # vessel by the POS MV itself) -- unlike the other sources, it must NOT go through
+                # pilot.get_ship_heading()'s compass_zero correction, which is specific to the RTK
+                # GPS antenna mounting offset and would misapply here.
+                self.ship_heading = normalize_angle(self.posmv.heading)
+                self.ship_heading_accuracy = self.posmv.heading_accuracy
+                self.ship_heading_timestamp = self.posmv.packet_heading_received
                 return True
         else:
             raise ValueError('Invalid heading source')
         return False
 
     def make_umtwr_frame(self):
-        # Ship Heading (based on relative RTK GPS position regardless of setting, as only point where it's reported)
-        if self.gps.heading_valid and time() - self.gps.packet_relposned_received < self.DATA_EXPIRED_DELAY:
-            ship_heading = self.pilot.get_ship_heading(self.gps.heading) % 360
-            ship_heading_accuracy = self.gps.heading_accuracy
+        # Ship Heading (from the active heading_source -- same value used to steer the tower)
+        if not isnan(self.ship_heading) and time() - self.ship_heading_timestamp < self.DATA_EXPIRED_DELAY:
+            ship_heading = self.ship_heading % 360
+            ship_heading_accuracy = self.ship_heading_accuracy
         else:
             ship_heading = float('nan')
             ship_heading_accuracy = float('nan')

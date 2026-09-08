@@ -31,6 +31,21 @@ logger = logging.getLogger('ui')
 
 runner = Runner(CFG_FILENAME)
 
+# Friendly labels for Runner.heading_source, see [Runner] heading_source in pysas_cfg.ini
+HEADING_SOURCE_LABELS = {
+    'gps_relative_position': 'RTK',
+    'gps_motion': 'GPS Motion',
+    'gps_vehicle': 'GPS Vehicle',
+    'ths_heading': 'THS',
+    'posmv_heading': 'POS MV',
+}
+
+MOTION_SOURCE_LABELS = {
+    'ths': 'THS',
+    'imu': 'IMU',
+    'posmv': 'POS MV',
+}
+
 app = dash.Dash(
     '__main__',
     title= "pySAS v" + __version__, update_title=None,
@@ -97,8 +112,18 @@ sidebar = html.Div([
                                   style={'lineHeight': 0.72}, className='mt-2 me-2'),
                         dbc.Switch(id="gps_switch", value=False, className='mt-2 ms-1 d-inline-block')],
                             width=9, className="text-end"),
-                    dbc.FormText(["Ship Heading: ", html.Span("NA", 'gps_text_angle'), "°N"],
+                    dbc.FormText(["Ship Heading (", html.Span(HEADING_SOURCE_LABELS.get(runner.heading_source, runner.heading_source),
+                                                              id='heading_source_label'),
+                                  "): ", html.Span("NA", 'gps_text_angle'), "°N"],
                                  id='gps_text', className='mt-0', color='muted'),
+                    dbc.FormText(["Position: ", html.Span("NA", id='position_text_value')],
+                                 id='position_text', className='mt-0', color='muted'),
+                    dbc.FormText(["Sun Azimuth: ", html.Span("NA", id='sun_azimuth_text_angle'), "°"],
+                                 id='sun_azimuth_text', className='mt-0', color='muted'),
+                    dbc.FormText(["Ship/Sun Diff: ", html.Span("NA", id='ship_sun_diff_text_angle'), "°  ",
+                                  dbc.Badge('Potential Ship Shadow on Lt', id='ship_shadow_warning',
+                                            color='danger', pill=True, className='d-none')],
+                                 id='ship_sun_diff_text', className='mt-0', color='muted'),
                 ], className="mb-3"),
                 dbc.Row([
                     dbc.Label("Tower", id='tower_label', html_for="tower_switch", width=4, style={'paddingRight': 0}),
@@ -375,13 +400,60 @@ settings_modal = dbc.Modal([
     dbc.ModalHeader(dbc.ModalTitle("pySAS Settings")),
     dbc.ModalBody([
         html.Div([
+            dbc.Label("Heading Source", html_for='heading_source_select'),
+            dcc.Dropdown(id='heading_source_select', searchable=False, clearable=False,
+                        options=[
+                            {'label': "RTK from pySAS's dual GPS", 'value': 'gps_relative_position'},
+                            {'label': "POS MV from ship navigation" if runner.posmv else
+                                      "POS MV from ship navigation (edit config file manually and restart pySAS to enable)",
+                             'value': 'posmv_heading', 'disabled': runner.posmv is None},
+                        ]),
+            dbc.FormText('Source used for ship heading, sun position, clock sync, and the position logged '
+                         'in the raw files. Selecting POS MV makes pySAS independent of its own GPS '
+                         'antennas -- the onboard GPS keeps running but stops logging its own position, '
+                         'so only POS MV data ends up in the raw files. Requires a [POSMV] section in the '
+                         'configuration file and a pySAS restart -- it cannot be enabled from this menu alone.',
+                         color='muted'),
+        ], className="mb-3"),
+        html.Div([
             dbc.Label("GPS Orientation", html_for="gps_orientation"),
             dbc.InputGroup([
                 dbc.Input(id='gps_orientation', type='number', min=-180, max=360, step=1, class_name='text-end'),
                 dbc.InputGroupText("°")
             ]),
-            dbc.FormText('Difference in heading between the GPS and the ship. '
-                         'For details, see schematics inside the pySAS controller box.', color='muted'),
+            dbc.FormText('Difference in heading between the GPS and the ship. Only applies when Heading '
+                         'Source is set to "RTK from pySAS\'s dual GPS" -- POS MV reports the ship\'s true '
+                         'heading directly and ignores this setting. For details, see schematics inside '
+                         'the pySAS controller box.', color='muted'),
+        ], className="mb-3"),
+        html.Div([
+            dbc.Label("Tower Orientation", html_for="tower_orientation_on_ship"),
+            dbc.InputGroup([
+                dbc.Input(id='tower_orientation_on_ship', type='number', min=-180, max=360, step=1, class_name='text-end'),
+                dbc.InputGroupText("°")
+            ]),
+            dbc.FormText('Difference in azimuth between the indexing table\'s zero position and the ship\'s '
+                         'bow (physical mounting offset of the pySAS tower itself). Unlike GPS Orientation, '
+                         'this applies regardless of Heading Source, since it corrects ship_heading itself '
+                         'after it has already been resolved from RTK or POS MV. Adjust and observe the '
+                         'System Orientation plot to find the right sign/value for your installation.',
+                         color='muted'),
+        ], className="mb-3"),
+        html.Div([
+            dbc.Label("Motion Source", html_for='motion_source_select'),
+            dcc.Dropdown(id='motion_source_select', searchable=False, clearable=False,
+                        options=[
+                            {'label': 'THS (HyperSAS compass/tilt)', 'value': 'ths'},
+                            {'label': 'IMU' if runner.imu else 'IMU (requires [IMU] section and restart to enable)',
+                             'value': 'imu', 'disabled': runner.imu is None},
+                            {'label': 'POS MV' if runner.posmv else
+                                      'POS MV (requires [POSMV] section and restart to enable)',
+                             'value': 'posmv', 'disabled': runner.posmv is None},
+                        ]),
+            dbc.FormText('Pitch/roll source shown in the timeseries plot and logged to the raw files '
+                         '(as a SATTHS frame for IMU/POS MV). Independent of Heading Source -- e.g. you '
+                         'can use POS MV for heading and still display THS pitch/roll, or vice versa.',
+                         color='muted'),
         ], className="mb-3"),
         dbc.Row([
             dbc.Label("Tower Orientation Range", html_for="tower_valid_orientation_prt"),
@@ -497,8 +569,11 @@ def toggle_settings_modal(open_modal, close_modal, is_open):
     return not is_open
 
 
-@app.callback(Output('tower_valid_orientation_prt', 'value'), Output('tower_valid_orientation_stb', 'value'),
+@app.callback(Output('heading_source_select', 'value'),
+              Output('motion_source_select', 'value'),
+              Output('tower_valid_orientation_prt', 'value'), Output('tower_valid_orientation_stb', 'value'),
               Output('gps_orientation', 'value'),
+              Output('tower_orientation_on_ship', 'value'),
               Output('optimal_sensors_azimuth', 'value'),
               Output('sensors_azimuth_min', 'value'), Output('sensors_azimuth_max', 'value'),
               Output('min_sun_elevation', 'value'),
@@ -513,7 +588,10 @@ def get_settings(is_open):
     # Get device file used
     device_file_options, current_device_file = get_device_file_options()
     # Other parameters
-    return (*runner.pilot.tower_limits, runner.pilot.compass_zero,
+    return (runner.heading_source,
+            runner.motion_source,
+            *runner.pilot.tower_limits, runner.pilot.compass_zero,
+            runner.pilot.tower_zero,
             runner.pilot.target, *runner.pilot.target_limits,
             runner.min_sun_elevation, runner.refresh_delay,
             device_file_options, current_device_file, 'light', False)
@@ -524,21 +602,38 @@ def get_settings(is_open):
               Output('fig_spectrum_cache', 'data', allow_duplicate=True),
               Output('fig_timeseries_cache', 'data', allow_duplicate=True),
               Input('settings_modal_save', 'n_clicks'),
+              State('heading_source_select', 'value'),
+              State('motion_source_select', 'value'),
               State('tower_valid_orientation_prt', 'value'), State('tower_valid_orientation_stb', 'value'),
               State('gps_orientation', 'value'),
+              State('tower_orientation_on_ship', 'value'),
               State('optimal_sensors_azimuth', 'value'),
               State('sensors_azimuth_min', 'value'), State('sensors_azimuth_max', 'value'),
               State('min_sun_elevation', 'value'),
               State('refresh_period', 'value'), State('select_device_file', 'value'),
               prevent_initial_call=True)
-def save_settings(save_click, prt, stb, gps, optimal_az, min_az, max_az, sun, period, device_file):
+def save_settings(save_click, heading_source, motion_source, prt, stb, gps, tower_zero, optimal_az, min_az, max_az, sun, period, device_file):
     if not save_click:
         raise PreventUpdate
     # Reset figures cache
     fig_spectrum_cache, fig_timeseries_cache = None, None
     # Check Input
+    if heading_source == 'posmv_heading' and not runner.posmv:
+        return True, ('POS MV is not configured on this pySAS. Add a [POSMV] section to the '
+                      'configuration file and restart pySAS before selecting it here.'), 'danger', 3600000, \
+               fig_spectrum_cache, fig_timeseries_cache
+    if motion_source == 'imu' and not runner.imu:
+        return True, ('IMU is not configured on this pySAS. Add an [IMU] section to the '
+                      'configuration file and restart pySAS before selecting it here.'), 'danger', 3600000, \
+               fig_spectrum_cache, fig_timeseries_cache
+    if motion_source == 'posmv' and not runner.posmv:
+        return True, ('POS MV is not configured on this pySAS. Add a [POSMV] section to the '
+                      'configuration file and restart pySAS before selecting it here.'), 'danger', 3600000, \
+               fig_spectrum_cache, fig_timeseries_cache
     if gps is None or gps < -180 or gps > 360:
         return True, 'Invalid gps orientation. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
+    if tower_zero is None or tower_zero < -180 or tower_zero > 360:
+        return True, 'Invalid tower orientation. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     if prt is None or stb is None or prt < -180 or prt > 360 or stb < -180 or stb > 360:
         return True, 'Invalid tower orientation range. Acceptable range -180 to 360.', 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     if optimal_az is None or optimal_az < -180 or sun > 360:
@@ -584,6 +679,18 @@ def save_settings(save_click, prt, stb, gps, optimal_az, min_az, max_az, sun, pe
             logger.warning(e)
             return True, "Unable to import device file. " + str(e), 'danger', 3600000, fig_spectrum_cache, fig_timeseries_cache
     # Save Other settings
+    runner.heading_source = heading_source
+    runner.set_cfg_variable('Runner', 'heading_source', heading_source)
+    if heading_source == 'posmv_heading':
+        # Stop the onboard GPS's own $GPRMC logging immediately rather than waiting for the next
+        # wakeup()/run_manual() cycle, so raw files only get POS MV's position stream from now on
+        runner.gps.stop_logging()
+    runner.motion_source = motion_source
+    runner.set_cfg_variable('Runner', 'motion_source', motion_source)
+    if runner.imu:
+        runner.imu._log_data = motion_source == 'imu'
+    if runner.posmv:
+        runner.posmv._log_attitude = motion_source == 'posmv'
     runner.pilot.set_tower_limits([prt, stb])
     runner.set_cfg_variable('AutoPilot', 'valid_indexing_table_orientation_limits', [prt, stb])
     runner.pilot.target = optimal_az
@@ -592,6 +699,8 @@ def save_settings(save_click, prt, stb, gps, optimal_az, min_az, max_az, sun, pe
     runner.set_cfg_variable('AutoPilot', 'valid_angle_away_from_sun_limits', [min_az, max_az])
     runner.pilot.compass_zero = gps
     runner.set_cfg_variable('AutoPilot', 'gps_orientation_on_ship', gps)
+    runner.pilot.tower_zero = tower_zero
+    runner.set_cfg_variable('AutoPilot', 'indexing_table_orientation_on_ship', tower_zero)
     runner.min_sun_elevation = sun
     runner.set_cfg_variable('Runner', 'min_sun_elevation', sun)
     runner.refresh_delay = period
@@ -920,11 +1029,19 @@ fig_system_orientation = fig
 @app.callback(Output('fig_system_orientation', 'figure'),
               Output('gps_text_angle', 'children'),
               Output('tower_text_angle', 'children'),
+              Output('heading_source_label', 'children'),
+              Output('position_text_value', 'children'),
+              Output('sun_azimuth_text_angle', 'children'),
+              Output('ship_sun_diff_text_angle', 'children'),
+              Output('ship_shadow_warning', 'className'),
               Input('status_refresh_interval', 'n_intervals'),
               Input('tower_orientation', 'value'),
               Input('settings_modal_save', 'n_clicks'))  # If Tower Orientation Range Updated
 def get_fig_system_orientation(_0, _1, _2):
     timestamp = time()
+    # Position/time source (GPS or POS MV) driving sun position, magnetic declination corrections,
+    # and the position readout below -- follows heading_source, see Runner._position_source()
+    position_source, _ = runner._position_source()
     # Update telemetry in special cases
     if runner.operation_mode == 'manual' and timestamp - runner.sun_position_timestamp > runner.refresh_delay:
         # Get Sun elevation
@@ -933,8 +1050,8 @@ def get_fig_system_orientation(_0, _1, _2):
         # Get HyperSAS THS Compass adjusted
         if runner.heading_source != 'ths_heading' and runner.hypersas.alive:
             runner.hypersas.compass_adj = get_true_north_heading(runner.hypersas.compass,
-                                                                 runner.gps.latitude, runner.gps.longitude,
-                                                                 runner.gps.datetime, runner.gps.altitude)
+                                                                 position_source.latitude, position_source.longitude,
+                                                                 position_source.datetime, position_source.altitude)
         # Get Heading
         runner.get_ship_heading()
     # Get Tower Orientation
@@ -953,8 +1070,9 @@ def get_fig_system_orientation(_0, _1, _2):
         ship = runner.ship_heading
         # Adjust Tower to ship referencial
         tower = ship - runner.pilot.tower_zero + tower
-        # Adjust blind zone to ship referencial
-        blind_zone_center = ship + blind_zone_center
+        # Adjust blind zone to ship referencial (same tower_zero correction as the tower trace above,
+        # since tower_limits are expressed in the indexing table's own raw position frame)
+        blind_zone_center = ship - runner.pilot.tower_zero + blind_zone_center
     # Get sun
     sun = float('nan')
     if timestamp - runner.sun_position_timestamp < runner.DATA_EXPIRED_DELAY and runner.sun_elevation > 0:
@@ -962,7 +1080,7 @@ def get_fig_system_orientation(_0, _1, _2):
     # Get HyperSAS Heading
     ths = float('nan')
     if timestamp - runner.hypersas.packet_THS_parsed < runner.DATA_EXPIRED_DELAY:
-        if isnan(runner.gps.latitude):
+        if isnan(position_source.latitude):
             ths = runner.hypersas.compass
         else:
             ths = runner.hypersas.compass_adj
@@ -970,12 +1088,12 @@ def get_fig_system_orientation(_0, _1, _2):
     imu = float('nan')
     if runner.imu:
         if timestamp - runner.imu.packet_received < runner.DATA_EXPIRED_DELAY:
-            if isnan(runner.gps.latitude):
+            if isnan(position_source.latitude):
                 imu = runner.imu.yaw
             else:
                 imu = get_true_north_heading(runner.imu.yaw,
-                                             runner.gps.latitude, runner.gps.longitude,
-                                             runner.gps.datetime, runner.gps.altitude)
+                                             position_source.latitude, position_source.longitude,
+                                             position_source.datetime, position_source.altitude)
     # Get motion heading from GPS
     motion = float('nan')
     if timestamp - runner.gps.packet_pvt_received < runner.DATA_EXPIRED_DELAY and \
@@ -995,16 +1113,38 @@ def get_fig_system_orientation(_0, _1, _2):
         else:
             fig['data'][id]['visible'] = True
             fig['data'][id]['theta'] = [0, value]
+    # Relabel the ship trace to match the active heading source (was a fixed "Ship (Dual GPS)" label)
+    fig['data'][ship_id]['name'] = ('Ship (POS MV)' if runner.heading_source == 'posmv_heading'
+                                     else 'Ship (Dual GPS)')
     # Update Ship Heading and Tower to Sun Azimuth Angle
     gps_text, tower_text = 'NA', 'NA'
     if not isnan(ship):
         gps_text = f'{ship % 360:.1f}'  # Shift to 360 to be consistent with orientation plot
-        if not isnan(runner.gps.heading_accuracy):
-            gps_text += f'±{runner.gps.heading_accuracy:.1f}'
+        if not isnan(runner.ship_heading_accuracy):
+            gps_text += f'±{runner.ship_heading_accuracy:.1f}'
         if not (isnan(tower) or isnan(sun)):
             # Need tower adjusted to ship referential to compute angle with respect to the sun (need ship heading)
             tower_text = f'{abs(((tower - sun) + 180) % 360 - 180):.1f}'
-    return fig, gps_text, tower_text
+    sun_azimuth_text = 'NA' if isnan(runner.sun_azimuth) else f'{runner.sun_azimuth:.1f}'
+    # Ship/Sun Diff: how close the sun is to being directly astern (~180 deg from ship heading),
+    # in which case the ship's own hull/superstructure may shadow the water Lt is looking at.
+    if isnan(ship) or isnan(runner.sun_azimuth):
+        ship_sun_diff_text = 'NA'
+        ship_shadow_class = 'd-none'
+    else:
+        ship_sun_diff = abs(((ship - runner.sun_azimuth) + 180) % 360 - 180)
+        ship_sun_diff_text = f'{ship_sun_diff:.1f}'
+        ship_shadow_class = 'ms-1' if ship_sun_diff >= 175 else 'd-none'
+    heading_source_text = HEADING_SOURCE_LABELS.get(runner.heading_source, runner.heading_source)
+    # Update Position (from the same source driving heading/sun position)
+    if isnan(position_source.latitude) or isnan(position_source.longitude):
+        position_text = 'NA'
+    else:
+        lat_hm = 'S' if position_source.latitude < 0 else 'N'
+        lon_hm = 'W' if position_source.longitude < 0 else 'E'
+        position_text = f'{abs(position_source.latitude):.4f}°{lat_hm}, {abs(position_source.longitude):.4f}°{lon_hm}'
+    return (fig, gps_text, tower_text, heading_source_text, position_text,
+            sun_azimuth_text, ship_sun_diff_text, ship_shadow_class)
 
 
 fig = go.Figure()
@@ -1087,19 +1227,13 @@ def get_fig_spectrum(_, cache):
 
 
 fig = go.Figure()
-imu_pitch_id = 0
-fig.add_scatter(x=[], y=[], name='Pitch (IMU)', marker_color='green', mode='lines+markers',
+pitch_id = 0
+fig.add_scatter(x=[], y=[], name='Pitch (THS)', marker_color='green', mode='lines+markers',
                 visible=False)
-imu_roll_id = 1
-fig.add_scatter(x=[], y=[], name='Roll (IMU)', marker_color='green', line_dash='dash', mode='lines+markers',
+roll_id = 1
+fig.add_scatter(x=[], y=[], name='Roll (THS)', marker_color='green', line_dash='dash', mode='lines+markers',
                 visible=False)
-ths_pitch_id = 2
-fig.add_scatter(x=[], y=[], name='Pitch (THS)', marker_color='gray', mode='lines+markers',
-                visible=False)
-ths_roll_id = 3
-fig.add_scatter(x=[], y=[], name='Roll (THS)', marker_color='gray', line_dash='dash', mode='lines+markers',
-                visible=False)
-es_490_id = 4
+es_490_id = 2
 fig.add_scatter(x=[], y=[], yaxis='y2', name='Es(490) (&mu;W/cm<sup>2</sup>/nm)',
                 marker_color='orange', mode='lines+markers', visible=False)
 
@@ -1115,16 +1249,32 @@ fig.update_layout(
 fig_timeseries = fig
 
 
+def get_motion_source():
+    """
+    Pitch/roll source following runner.motion_source (independent of heading_source).
+    :return: (packet_timestamp, packet_received, pitch, roll)
+    """
+    if runner.motion_source == 'imu' and runner.imu:
+        return (runner.imu.packet_received, runner.imu.packet_received,
+                runner.imu.pitch, runner.imu.roll)
+    elif runner.motion_source == 'posmv' and runner.posmv:
+        return (runner.posmv.packet_heading_received, runner.posmv.packet_heading_received,
+                runner.posmv.pitch, runner.posmv.roll)
+    else:  # 'ths' default/fallback
+        return (runner.hypersas.packet_THS_parsed, runner.hypersas._packet_THS_received,
+                runner.hypersas.pitch, runner.hypersas.roll)
+
+
 @app.callback(Output('fig_timeseries', 'figure'), Output('fig_timeseries_cache', 'data', allow_duplicate=True),
               Input('hypersas_reading_interval', 'n_intervals'),
               State('fig_timeseries_cache', 'data'), prevent_initial_call=True)
 def get_fig_timeseries(_, cache):
     fig = Patch()
     timestamp = time()
-    max_points = [120, 120, 60, 60, 90]
+    max_points = [120, 120, 90]
     if not cache:
-        count, last_timestamp = [0] * 5, [0] * 5
-        for id in range(5):
+        count, last_timestamp = [0] * 3, [0] * 3
+        for id in range(3):
             fig['data'][id]['x'] = []
             fig['data'][id]['y'] = []
     else:
@@ -1149,17 +1299,13 @@ def get_fig_timeseries(_, cache):
         else:
             fig['data'][id]['visible'] = False
 
-    # Get THS Heading
-    set_patch(runner.hypersas.packet_THS_parsed, runner.hypersas._packet_THS_received,
-              runner.hypersas.pitch, ths_pitch_id)
-    set_patch(runner.hypersas.packet_THS_parsed, runner.hypersas._packet_THS_received,
-              runner.hypersas.roll, ths_roll_id)
-    # Get IMU Heading
-    if runner.imu:
-        set_patch(runner.imu.packet_received, runner.imu.packet_received,
-                  runner.imu.pitch, imu_pitch_id)
-        set_patch(runner.imu.packet_received, runner.imu.packet_received,
-                  runner.imu.roll, imu_roll_id)
+    # Get Pitch/Roll from the active motion source
+    rx, dt, pitch, roll = get_motion_source()
+    motion_source_label = MOTION_SOURCE_LABELS.get(runner.motion_source, runner.motion_source)
+    fig['data'][pitch_id]['name'] = f'Pitch ({motion_source_label})'
+    fig['data'][roll_id]['name'] = f'Roll ({motion_source_label})'
+    set_patch(rx, dt, pitch, pitch_id)
+    set_patch(rx, dt, roll, roll_id)
     # Get Es(490)
     if runner.es:
         if runner.es.Es is not None:

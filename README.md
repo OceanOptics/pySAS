@@ -39,3 +39,14 @@ Recommended pySAS configuration:
     + 1: HyperSAS
     + 2: Es
     + 3: GPS
+
+### Heading Source
+By default, pySAS computes the ship's heading from its own dual RTK-GPS (moving base + rover, `heading_source = gps_relative_position` in `pysas_cfg.ini`). This requires no external input, but its accuracy depends on the RTK fix quality of the two onboard antennas.
+
+If the vessel has its own integrated GPS+IMU navigation system (e.g. Applanix POS MV) that broadcasts heading over the ship's network, pySAS can use it instead -- and become fully independent of its own two GPS antennas (heading, sun position, clock sync, and the position logged in the raw files all switch to POS MV; the onboard GPS keeps running but stops logging its own position, so a hardware failure on either antenna no longer affects operation):
+  1. Add a `[POSMV]` section to `pysas_cfg.ini` with the UDP `host`/`port` the ship's system broadcasts NMEA-like sentences on (`INGGA`/`INZDA`/`INHDT`/`PASHR`/`INVTG`), and restart pySAS.
+  2. In the web interface, open Settings and set Heading Source to "POS MV from ship navigation".
+
+POS MV reports the ship's true heading directly (already calibrated to the vessel), so the GPS Orientation setting -- which corrects for the RTK antennas' mounting offset -- does not apply when this source is selected.
+
+Two additional sources (`gps_motion`, `gps_vehicle`) and a legacy `ths_heading` option (HyperSAS' own compass) exist but are only selectable by editing `heading_source` directly in `pysas_cfg.ini`, not from the Settings menu.

@@ -5,8 +5,7 @@ header or obscure a real one. Inspection includes invalid candidates; recovery
 retains only fully validated frames and writes to a new file.
 
 Example:
-    python -m prepSAS.inspect_raw_damage data.raw extracted_calibration_directory
-    python -m prepSAS.inspect_raw_damage recovered.raw extracted_calibration_directory --figures
+    python -m prepSAS.recover_raw data.raw extracted_calibration_directory --recover-output data.recovered.raw --figures
 """
 
 from __future__ import annotations

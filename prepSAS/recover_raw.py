@@ -22,6 +22,8 @@ import json
 from pathlib import Path
 import re
 from struct import error as StructError, unpack
+import zipfile
+from typing import Optional
 
 from pySatlantic.instrument import Instrument
 
@@ -98,6 +100,28 @@ def decode_timestamp(suffix: bytes, latest: datetime) -> datetime | None:
     except (StructError, ValueError, OverflowError):
         return None
 
+
+def extract_sip(sip_path: Path, output_dir: Optional[Path] = None) -> Path:
+    """Extract a Satlantic SIP archive to a directory and return the calibration path."""
+    if output_dir is None:
+        output_dir = sip_path.parent
+    archive = zipfile.ZipFile(sip_path, 'r')
+    archive.extractall(path=output_dir)
+
+    if not sip_path.is_file():
+        raise FileNotFoundError(f"Cannot find SIP archive: {sip_path}")
+    if output_dir.exists() and not output_dir.is_dir():
+        raise NotADirectoryError(f"Cannot extract SIP to a non-directory: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(sip_path) as archive:
+        archive.extractall(output_dir)
+
+
+def extract_calibration(cal_path: Path) -> Path:
+    """Return the path to the extracted calibration directory."""
+    for f in cal_path.iterdir():
+        if not f.is_dir() and f.name.lower().endswith(".sip"):
+            extract_sip(f)
 
 def inspect(raw_path: Path, cal_path: Path, bucket_minutes: int | None = None) -> dict:
     if not cal_path.is_dir():
@@ -720,6 +744,7 @@ def main() -> None:
     if args.audit and not args.recover_output:
         arg.error("--audit requires --recover-output")
     jobs, is_directory = plan_inputs(args.raw, args.recover_output, args.figures, args.audit)
+    extract_calibration(args.calibration)
     results = []
     for source, target in jobs:
         report = inspect(source, args.calibration, args.bucket_minutes)
